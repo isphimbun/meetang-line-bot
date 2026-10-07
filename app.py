@@ -352,6 +352,16 @@ async def api_loan_expense(request: Request):
     if row is None: raise HTTPException(status_code=400, detail='save failed')
     return row
 
+@app.get('/api/features/me')
+def api_my_features(user_id: str):
+    user_id = str(user_id or '').strip()
+    if not user_id:
+        raise HTTPException(status_code=400, detail='user_id required')
+    # Return only this user's effective system-level feature flags.
+    # Super Admin always has access; other users get only features explicitly granted by Super Admin.
+    from database import FEATURES, global_user_has_feature
+    return {'features': {key: bool(global_user_has_feature(user_id, key)) for key in FEATURES}}
+
 @app.get('/api/superadmin/status')
 def api_superadmin_status(user_id: str):
     return {'is_super_admin': is_super_admin(user_id), 'user_id': user_id}
