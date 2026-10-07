@@ -30,3 +30,9 @@ Environment:
 
 ## สำคัญ
 ก่อน Deploy ให้ดาวน์โหลด backup ฐานข้อมูลจาก Dashboard ในเมนูตั้งค่า Admin ก่อนเสมอ โดยเฉพาะถ้าใช้ SQLite บน Render Free ซึ่ง filesystem อาจไม่ถาวรเมื่อมี restart/redeploy.
+
+## Super Admin feature control
+Set `SUPER_ADMIN_USER_ID` to the one LINE User ID that owns the MeeTang system. Only this user can open/close `loan` (🏠 บ้าน & สินเชื่อ) and `installment` (💳 รายการผ่อน) for individual users. Household admins no longer control these two global features.
+
+## Super Admin feature control
+Set `SUPER_ADMIN_USER_ID` to the one LINE User ID that owns the MeeTang system. Only this user can open/close `loan` (🏠 บ้าน & สินเชื่อ) and `installment` (💳 รายการผ่อน) for individual users. Household admins do not control these global features.

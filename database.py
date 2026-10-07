@@ -68,6 +68,11 @@ def init_db():
             PRIMARY KEY (household_id, user_id, feature)
         )''')
         c.execute('CREATE INDEX IF NOT EXISTS idx_feature_perm_house ON household_feature_permissions(household_id, user_id)')
+        c.execute("""CREATE TABLE IF NOT EXISTS global_feature_permissions (
+            user_id TEXT NOT NULL, feature TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL,
+            PRIMARY KEY (user_id, feature)
+        )""")
+        c.execute('CREATE INDEX IF NOT EXISTS idx_global_feature_user ON global_feature_permissions(user_id)')
         c.execute('''CREATE TABLE IF NOT EXISTS mortgages (
             id INTEGER PRIMARY KEY AUTOINCREMENT, household_id INTEGER UNIQUE NOT NULL, property_name TEXT DEFAULT '',
             purchase_price REAL DEFAULT 0, loan_amount REAL DEFAULT 0, start_date TEXT, term_years INTEGER DEFAULT 30,
@@ -284,6 +289,44 @@ FEATURES = {
     'installment': '💳 รายการผ่อน',
 }
 
+def is_super_admin(user_id):
+    configured = (os.getenv('SUPER_ADMIN_USER_ID') or '').strip()
+    return bool(configured and str(user_id or '').strip() == configured)
+
+def get_global_feature_permissions(requester_user_id):
+    if not is_super_admin(requester_user_id):
+        return None
+    with conn() as c:
+        users = [dict(r) for r in c.execute('SELECT user_id,display_name,created_at FROM users ORDER BY created_at').fetchall()]
+        rows = c.execute('SELECT user_id,feature,enabled FROM global_feature_permissions').fetchall()
+    enabled = {}
+    for r in rows:
+        enabled.setdefault(r['user_id'], {f: False for f in FEATURES})[r['feature']] = bool(r['enabled'])
+    members = []
+    for u in users:
+        members.append({**u, 'features': enabled.get(u['user_id'], {f: False for f in FEATURES})})
+    return {'features': FEATURES, 'users': members}
+
+def set_global_feature(requester_user_id, member_user_id, feature, enabled):
+    if not is_super_admin(requester_user_id): return False
+    if feature not in FEATURES: return False
+    with conn() as c:
+        exists = c.execute('SELECT 1 FROM users WHERE user_id=?', (member_user_id,)).fetchone()
+        if not exists: return False
+        now = datetime.now(TZ).isoformat(timespec='seconds')
+        c.execute("""INSERT INTO global_feature_permissions(user_id,feature,enabled,updated_at) VALUES(?,?,?,?)
+                     ON CONFLICT(user_id,feature) DO UPDATE SET enabled=excluded.enabled, updated_at=excluded.updated_at""",
+                  (member_user_id, feature, 1 if enabled else 0, now))
+        c.commit()
+    return True
+
+def global_user_has_feature(user_id, feature):
+    if feature not in FEATURES: return False
+    if is_super_admin(user_id): return True
+    with conn() as c:
+        r = c.execute('SELECT enabled FROM global_feature_permissions WHERE user_id=? AND feature=?', (user_id, feature)).fetchone()
+    return bool(r and r['enabled'])
+
 def is_household_admin(user_id, household_id):
     with conn() as c:
         r = c.execute('SELECT role FROM household_members WHERE household_id=? AND user_id=?', (household_id, user_id)).fetchone()
@@ -332,13 +375,8 @@ def set_member_features(requester_user_id, household_id, member_user_id, feature
         c.commit(); return True
 
 def user_has_feature(user_id, household_id, feature):
-    if feature not in FEATURES: return False
-    if is_household_admin(user_id, household_id): return True
-    with conn() as c:
-        r = c.execute('SELECT enabled FROM household_feature_permissions WHERE household_id=? AND user_id=? AND feature=?',
-                      (household_id, user_id, feature)).fetchone()
-    return bool(r and r['enabled'])
-
+    # Global Super Admin permissions are authoritative for these system-level features.
+    return global_user_has_feature(user_id, feature)
 
 def get_mortgage(household_id):
     with conn() as c:
@@ -349,7 +387,7 @@ def get_mortgage(household_id):
     return {**dict(m), 'rates':[dict(r) for r in rates], 'payments':[dict(x) for x in payments]}
 
 def save_mortgage(user_id, household_id, data):
-    if not is_household_admin(user_id, household_id): return None
+    if not user_has_feature(user_id, household_id, 'loan'): return None
     now=datetime.now(TZ).isoformat(timespec='seconds')
     fields=('property_name','purchase_price','loan_amount','start_date','term_years','monthly_payment','bank','contract_no','payment_day','current_mrr')
     vals=[data.get(k) for k in fields]

@@ -10,7 +10,7 @@ from database import (init_db, upsert_user, create_household, join_household, ge
                       get_commands, add_command, update_command, delete_command, find_command,
                       get_categories, delete_transaction, set_display_name, get_household, get_settlement,
                       rename_household, delete_household, leave_household, is_household_admin,
-                      get_member_permissions, set_member_features, set_member_role, user_has_feature, get_mortgage, save_mortgage, add_mortgage_payment, mortgage_forecast, get_house_insurance, add_house_insurance, get_house_expenses, add_house_expense, get_installments, add_installment, add_installment_payment)
+                      get_member_permissions, set_member_features, set_member_role, user_has_feature, get_mortgage, is_super_admin, get_global_feature_permissions, set_global_feature, is_super_admin, get_global_feature_permissions, set_global_feature, global_user_has_feature, save_mortgage, add_mortgage_payment, mortgage_forecast, get_house_insurance, add_house_insurance, get_house_expenses, add_house_expense, get_installments, add_installment, add_installment_payment)
 from ai import parse_text, parse_slip
 from split_utils import parse_split_instruction
 from flex import summary_flex, transaction_flex, recent_flex, settlement_flex, household_flex, help_text
@@ -291,6 +291,29 @@ async def api_loan_expense(request: Request):
     row=add_house_expense(user_id,hid,payload)
     if row is None: raise HTTPException(status_code=400, detail='save failed')
     return row
+
+@app.get('/api/superadmin/status')
+def api_superadmin_status(user_id: str):
+    return {'is_super_admin': is_super_admin(user_id), 'user_id': user_id}
+
+@app.get('/api/superadmin/features')
+def api_superadmin_features(user_id: str):
+    if not is_super_admin(user_id):
+        raise HTTPException(status_code=403, detail='super admin only')
+    return get_global_feature_permissions(user_id)
+
+@app.put('/api/superadmin/features')
+async def api_superadmin_set_feature(request: Request):
+    data = await request.json()
+    requester = str(data.get('user_id') or '').strip()
+    target = str(data.get('target_user_id') or '').strip()
+    feature = str(data.get('feature') or '').strip()
+    enabled = bool(data.get('enabled'))
+    if not is_super_admin(requester):
+        raise HTTPException(status_code=403, detail='super admin only')
+    if not set_global_feature(requester, target, feature, enabled):
+        raise HTTPException(status_code=400, detail='invalid user or feature')
+    return get_global_feature_permissions(requester)
 
 @app.get('/api/permissions')
 def api_permissions(user_id: str, household_id: int):
