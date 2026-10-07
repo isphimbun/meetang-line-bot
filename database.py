@@ -86,7 +86,27 @@ def init_db():
             amount REAL NOT NULL, principal REAL DEFAULT 0, interest REAL DEFAULT 0, extra_principal REAL DEFAULT 0, note TEXT DEFAULT '')''')
         c.execute('''CREATE TABLE IF NOT EXISTS house_insurance (
             id INTEGER PRIMARY KEY AUTOINCREMENT, household_id INTEGER NOT NULL, insurance_type TEXT NOT NULL,
-            provider TEXT DEFAULT '', amount REAL NOT NULL, payment_cycle TEXT DEFAULT 'รายปี', due_date TEXT, status TEXT DEFAULT 'ยังไม่จ่าย', note TEXT DEFAULT '')''')
+            provider TEXT DEFAULT '', amount REAL NOT NULL, payment_cycle TEXT DEFAULT 'รายปี', due_date TEXT, status TEXT DEFAULT 'ยังไม่จ่าย', note TEXT DEFAULT '',
+            payment_method TEXT DEFAULT 'จ่ายครั้งเดียว', financed_amount REAL DEFAULT 0, financed_installments INTEGER DEFAULT 0,
+            financed_monthly_payment REAL DEFAULT 0, financed_start_date TEXT, financed_payment_day INTEGER DEFAULT 31,
+            rate_mode TEXT DEFAULT 'same_as_mortgage', rate_percent REAL DEFAULT 0)''')
+        ins_cols={r['name'] for r in c.execute('PRAGMA table_info(house_insurance)').fetchall()}
+        ins_migrations={
+            'payment_method': "ALTER TABLE house_insurance ADD COLUMN payment_method TEXT DEFAULT 'จ่ายครั้งเดียว'",
+            'financed_amount': 'ALTER TABLE house_insurance ADD COLUMN financed_amount REAL DEFAULT 0',
+            'financed_installments': 'ALTER TABLE house_insurance ADD COLUMN financed_installments INTEGER DEFAULT 0',
+            'financed_monthly_payment': 'ALTER TABLE house_insurance ADD COLUMN financed_monthly_payment REAL DEFAULT 0',
+            'financed_start_date': 'ALTER TABLE house_insurance ADD COLUMN financed_start_date TEXT',
+            'financed_payment_day': 'ALTER TABLE house_insurance ADD COLUMN financed_payment_day INTEGER DEFAULT 31',
+            'rate_mode': "ALTER TABLE house_insurance ADD COLUMN rate_mode TEXT DEFAULT 'same_as_mortgage'",
+            'rate_percent': 'ALTER TABLE house_insurance ADD COLUMN rate_percent REAL DEFAULT 0',
+        }
+        for col,sql in ins_migrations.items():
+            if col not in ins_cols: c.execute(sql)
+        c.execute('''CREATE TABLE IF NOT EXISTS house_insurance_payments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, insurance_id INTEGER NOT NULL, payment_date TEXT NOT NULL,
+            amount REAL NOT NULL, principal REAL DEFAULT 0, interest REAL DEFAULT 0, note TEXT DEFAULT '')''')
+        c.execute('CREATE INDEX IF NOT EXISTS idx_insurance_payment ON house_insurance_payments(insurance_id,payment_date)')
         c.execute('''CREATE TABLE IF NOT EXISTS house_expenses (
             id INTEGER PRIMARY KEY AUTOINCREMENT, household_id INTEGER NOT NULL, expense_date TEXT NOT NULL,
             expense_type TEXT NOT NULL, description TEXT DEFAULT '', amount REAL NOT NULL, note TEXT DEFAULT '')''')
@@ -386,11 +406,29 @@ def get_mortgage(household_id):
         payments = c.execute('SELECT * FROM mortgage_payments WHERE mortgage_id=? ORDER BY payment_date,id', (m['id'],)).fetchall()
     return {**dict(m), 'rates':[dict(r) for r in rates], 'payments':[dict(x) for x in payments]}
 
+def calc_monthly_payment(principal, annual_rate, months):
+    principal=float(principal or 0); annual_rate=float(annual_rate or 0); months=int(months or 0)
+    if principal<=0 or months<=0: return 0.0
+    r=annual_rate/100/12
+    if r==0: return round(principal/months,2)
+    return round(principal*r/(1-(1+r)**(-months)),2)
+
 def save_mortgage(user_id, household_id, data):
     if not user_has_feature(user_id, household_id, 'loan'): return None
     now=datetime.now(TZ).isoformat(timespec='seconds')
     fields=('property_name','purchase_price','loan_amount','start_date','term_years','monthly_payment','bank','contract_no','payment_day','current_mrr')
     vals=[data.get(k) for k in fields]
+    # If the user leaves the monthly payment blank, estimate it from the first rate and term.
+    try:
+        if not float(vals[5] or 0):
+            rr=(data.get('rates') or [{}])[0]
+            rate=float(rr.get('rate_percent') or 0)
+            if rr.get('rate_type')=='mrr': rate=float(data.get('current_mrr') or 0)+float(rr.get('mrr_offset') or 0)
+            vals[5]=calc_monthly_payment(vals[2],rate,int(vals[4] or 30)*12)
+        else:
+            vals[5]=float(vals[5])
+        vals[1]=float(vals[1] or 0); vals[2]=float(vals[2] or 0); vals[4]=int(vals[4] or 30); vals[8]=int(vals[8] or 31); vals[9]=float(vals[9] or 0)
+    except Exception: pass
     with conn() as c:
         old=c.execute('SELECT id FROM mortgages WHERE household_id=?',(household_id,)).fetchone()
         if old:
@@ -413,14 +451,68 @@ def add_mortgage_payment(user_id, household_id, data):
         c.commit()
     return get_mortgage(household_id)
 
+def _rate_for_month(mortgage, ym):
+    if not mortgage: return 0.0
+    rates=mortgage.get('rates') or []
+    rr=next((r for r in reversed(rates) if (r.get('start_date') or '')[:7] <= ym and (not r.get('end_date') or ym <= (r.get('end_date') or '')[:7])), None)
+    if rr and rr.get('rate_type')=='mrr':
+        return float(mortgage.get('current_mrr') or 0)+float(rr.get('mrr_offset') or 0)
+    return float(rr.get('rate_percent') or 0) if rr else 0.0
+
 def get_house_insurance(household_id):
-    with conn() as c: return [dict(r) for r in c.execute('SELECT * FROM house_insurance WHERE household_id=? ORDER BY due_date,id',(household_id,)).fetchall()]
+    with conn() as c:
+        rows=[dict(r) for r in c.execute('SELECT * FROM house_insurance WHERE household_id=? ORDER BY due_date,id',(household_id,)).fetchall()]
+        for x in rows:
+            x['payments']=[dict(r) for r in c.execute('SELECT * FROM house_insurance_payments WHERE insurance_id=? ORDER BY payment_date,id',(x['id'],)).fetchall()]
+    return rows
+
+def save_house_insurance(user_id, household_id, data):
+    if not is_household_admin(user_id, household_id): return None
+    now=datetime.now(TZ).isoformat(timespec='seconds')
+    fields=('insurance_type','provider','amount','payment_cycle','due_date','status','note','payment_method','financed_amount','financed_installments','financed_monthly_payment','financed_start_date','financed_payment_day','rate_mode','rate_percent')
+    vals=[data.get(k) for k in fields]
+    vals[2]=float(vals[2] or 0); vals[8]=float(vals[8] or 0); vals[9]=int(vals[9] or 0); vals[10]=float(vals[10] or 0); vals[12]=int(vals[12] or 31); vals[14]=float(vals[14] or 0)
+    with conn() as c:
+        iid=int(data.get('id') or 0)
+        if iid:
+            c.execute('UPDATE house_insurance SET insurance_type=?,provider=?,amount=?,payment_cycle=?,due_date=?,status=?,note=?,payment_method=?,financed_amount=?,financed_installments=?,financed_monthly_payment=?,financed_start_date=?,financed_payment_day=?,rate_mode=?,rate_percent=? WHERE id=? AND household_id=?',(*vals,iid,household_id))
+        else:
+            cur=c.execute('INSERT INTO house_insurance(household_id,insurance_type,provider,amount,payment_cycle,due_date,status,note,payment_method,financed_amount,financed_installments,financed_monthly_payment,financed_start_date,financed_payment_day,rate_mode,rate_percent) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(household_id,*vals)); iid=cur.lastrowid
+        c.commit()
+    return next((x for x in get_house_insurance(household_id) if x['id']==iid),None)
 
 def add_house_insurance(user_id, household_id, data):
-    if not is_household_admin(user_id, household_id): return None
+    return save_house_insurance(user_id, household_id, data)
+
+def add_house_insurance_payment(user_id, household_id, data):
+    if not user_has_feature(user_id, household_id, 'loan'): return None
+    iid=int(data.get('insurance_id') or 0)
     with conn() as c:
-        cur=c.execute('INSERT INTO house_insurance(household_id,insurance_type,provider,amount,payment_cycle,due_date,status,note) VALUES(?,?,?,?,?,?,?,?)',(household_id,data.get('insurance_type','ประกันบ้าน'),data.get('provider',''),float(data.get('amount') or 0),data.get('payment_cycle','รายปี'),data.get('due_date'),data.get('status','ยังไม่จ่าย'),data.get('note',''))); c.commit()
-        return dict(c.execute('SELECT * FROM house_insurance WHERE id=?',(cur.lastrowid,)).fetchone())
+        ins=c.execute('SELECT * FROM house_insurance WHERE id=? AND household_id=?',(iid,household_id)).fetchone()
+        if not ins or str(ins['payment_method'])!='ผ่อนแยก': return None
+        cur=c.execute('INSERT INTO house_insurance_payments(insurance_id,payment_date,amount,principal,interest,note) VALUES(?,?,?,?,?,?)',(iid,data.get('payment_date') or datetime.now(TZ).date().isoformat(),float(data.get('amount') or 0),float(data.get('principal') or 0),float(data.get('interest') or 0),data.get('note','')))
+        c.commit()
+    return next((x for x in get_house_insurance(household_id) if x['id']==iid),None)
+
+def insurance_forecast(insurance, mortgage, months=120):
+    if not insurance or str(insurance.get('payment_method'))!='ผ่อนแยก': return []
+    balance=float(insurance.get('financed_amount') or insurance.get('amount') or 0)
+    payment=float(insurance.get('financed_monthly_payment') or 0)
+    n=int(insurance.get('financed_installments') or 0)
+    if balance<=0 or n<=0: return []
+    start=insurance.get('financed_start_date') or insurance.get('due_date') or datetime.now(TZ).date().isoformat()
+    sy,sm=int(start[:4]),int(start[5:7]); rows=[]
+    for i in range(1,min(months,n)+1):
+        idx=(sm-1)+(i-1); year=sy+idx//12; month=(idx%12)+1; date=f'{year:04d}-{month:02d}-01'; ym=date[:7]
+        rate=float(insurance.get('rate_percent') or 0) if insurance.get('rate_mode')=='custom' else _rate_for_month(mortgage,ym)
+        interest=round(balance*rate/100/12,2)
+        if payment<=0:
+            payment=max(interest, round(balance/(n-i+1)+interest,2))
+        pay=round(min(payment,balance+interest),2); principal=round(max(0,min(pay-interest,balance)),2); end=round(balance-principal,2)
+        rows.append({'no':i,'date':date,'rate':rate,'payment':pay,'interest':interest,'principal':principal,'balance':end})
+        balance=end
+        if balance<=0: break
+    return rows
 
 def get_house_expenses(household_id, month=None):
     with conn() as c:

@@ -36,3 +36,11 @@ Set `SUPER_ADMIN_USER_ID` to the one LINE User ID that owns the MeeTang system. 
 
 ## Super Admin feature control
 Set `SUPER_ADMIN_USER_ID` to the one LINE User ID that owns the MeeTang system. Only this user can open/close `loan` (🏠 บ้าน & สินเชื่อ) and `installment` (💳 รายการผ่อน) for individual users. Household admins do not control these global features.
+
+
+## v12 loan fix
+- บ้านและ MRTA เป็นคนละวงเงิน
+- MRTA รองรับผ่อนแยกและใช้อัตราดอกเบี้ยเดียวกับสินเชื่อบ้าน
+- มีตารางผ่อน/บันทึกงวดประกันแยก
+- ป้องกันค่างวดบ้านต่ำกว่าดอกเบี้ยเดือนแรก
+- เว้นค่างวดบ้านว่างได้เพื่อให้ระบบประมาณการจากดอกเบี้ยแรกและระยะเวลา

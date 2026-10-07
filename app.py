@@ -10,7 +10,8 @@ from database import (init_db, upsert_user, create_household, join_household, ge
                       get_commands, add_command, update_command, delete_command, find_command,
                       get_categories, delete_transaction, set_display_name, get_household, get_settlement,
                       rename_household, delete_household, leave_household, is_household_admin,
-                      get_member_permissions, set_member_features, set_member_role, user_has_feature, get_mortgage, is_super_admin, get_global_feature_permissions, set_global_feature, is_super_admin, get_global_feature_permissions, set_global_feature, global_user_has_feature, save_mortgage, add_mortgage_payment, mortgage_forecast, get_house_insurance, add_house_insurance, get_house_expenses, add_house_expense, get_installments, add_installment, add_installment_payment)
+                      get_member_permissions, set_member_features, set_member_role, user_has_feature, get_mortgage, is_super_admin, get_global_feature_permissions, set_global_feature, is_super_admin, get_global_feature_permissions, set_global_feature, global_user_has_feature, save_mortgage, add_mortgage_payment, mortgage_forecast, get_house_insurance,
+    insurance_forecast, add_house_insurance_payment, add_house_insurance, get_house_expenses, add_house_expense, get_installments, add_installment, add_installment_payment)
 from ai import parse_text, parse_slip
 from split_utils import parse_split_instruction
 from flex import summary_flex, transaction_flex, recent_flex, settlement_flex, household_flex, help_text
@@ -258,7 +259,11 @@ def api_loan(user_id: str, household_id: int):
     paid_principal=sum(float(x.get('principal') or 0) + float(x.get('extra_principal') or 0) for x in (m or {}).get('payments',[]))
     paid_interest=sum(float(x.get('interest') or 0) for x in (m or {}).get('payments',[]))
     actual_balance=max(0, float((m or {}).get('loan_amount') or 0)-paid_principal)
-    return {'mortgage':m,'forecast':forecast,'insurance':ins,'expenses':exp,'paid_principal':round(paid_principal,2),'paid_interest':round(paid_interest,2),'actual_balance':round(actual_balance,2)}
+    insurance_forecasts={}
+    for x in ins:
+        if str(x.get('payment_method'))=='ผ่อนแยก':
+            insurance_forecasts[str(x['id'])]=insurance_forecast(x,m,int(x.get('financed_installments') or 120))
+    return {'mortgage':m,'forecast':forecast,'insurance':ins,'insurance_forecasts':insurance_forecasts,'expenses':exp,'paid_principal':round(paid_principal,2),'paid_interest':round(paid_interest,2),'actual_balance':round(actual_balance,2)}
 
 @app.put('/api/loan')
 async def api_save_loan(request: Request):
@@ -282,6 +287,14 @@ async def api_loan_insurance(request: Request):
     if not user_id or not hid or not is_household_admin(user_id,hid): raise HTTPException(status_code=403, detail='admin only')
     row=add_house_insurance(user_id,hid,payload)
     if row is None: raise HTTPException(status_code=400, detail='save failed')
+    return row
+
+@app.post('/api/loan/insurance/payment')
+async def api_loan_insurance_payment(request: Request):
+    payload=await request.json(); user_id=str(payload.get('user_id') or '').strip(); hid=int(payload.get('household_id') or 0)
+    if not user_id or not hid or not user_has_feature(user_id,hid,'loan'): raise HTTPException(status_code=403, detail='loan feature disabled')
+    row=add_house_insurance_payment(user_id,hid,payload)
+    if row is None: raise HTTPException(status_code=400, detail='insurance is not a separate installment plan')
     return row
 
 @app.post('/api/loan/expense')
