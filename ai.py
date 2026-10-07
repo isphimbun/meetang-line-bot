@@ -1,51 +1,56 @@
-import os, json, base64, re, requests
+import re
+from datetime import datetime
 
-OPENAI_API_KEY=os.getenv('OPENAI_API_KEY','')
-MODEL=os.getenv('OPENAI_MODEL','gpt-5-mini')
 CATS=['อาหาร','บ้าน','เดินทาง','ช้อปปิ้ง','บิล/ค่าสาธารณูปโภค','สุขภาพ','บันเทิง','ท่องเที่ยว','เงินออม/ลงทุน','เงินเดือน','ธุรกิจ','อื่นๆ']
 
-SCHEMA={
-  'type':'object','properties':{
-    'type':{'type':'string','enum':['income','expense']},
-    'amount':{'type':['number','null']},
-    'category':{'type':'string','enum':CATS},
-    'merchant':{'type':'string'},
-    'note':{'type':'string'},
-    'occurred_at':{'type':'string'}
-  },'required':['type','amount','category','merchant','note','occurred_at'],'additionalProperties':False
+KEYWORDS={
+    'อาหาร':['ข้าว','กิน','อาหาร','กาแฟ','กาแฟ','ชา','ชาบู','หมูกระทะ','ร้านอาหาร','ของกิน','ขนม','น้ำ','เครื่องดื่ม','7-11','เซเว่น'],
+    'บ้าน':['ค่าเช่า','คอนโด','บ้าน','เฟอร์นิเจอร์','ของใช้บ้าน','ของเข้าบ้าน'],
+    'เดินทาง':['น้ำมัน','เติมน้ำมัน','แท็กซี่','grab','bolt','รถไฟ','mrt','bts','ทางด่วน','ที่จอดรถ','เดินทาง'],
+    'ช้อปปิ้ง':['ซื้อ','ช้อป','เสื้อ','รองเท้า','กระเป๋า','เครื่องสำอาง','ของใช้'],
+    'บิล/ค่าสาธารณูปโภค':['ค่าไฟ','ค่าน้ำ','ค่าเน็ต','อินเทอร์เน็ต','โทรศัพท์','ค่าโทร','บิล'],
+    'สุขภาพ':['ยา','หมอ','โรงพยาบาล','คลินิก','สุขภาพ'],
+    'บันเทิง':['หนัง','เกม','คอนเสิร์ต','เที่ยวเล่น','karaoke','คาราโอเกะ'],
+    'ท่องเที่ยว':['โรงแรม','ที่พัก','เที่ยว','ตั๋วเครื่องบิน','เครื่องบิน'],
+    'เงินออม/ลงทุน':['ออม','เก็บเงิน','ลงทุน','กองทุน','หุ้น'],
+    'ธุรกิจ':['วัตถุดิบ','แพ็กเกจ','ค่าส่ง','ธุรกิจ','ร้านค้า'],
 }
 
-def call_ai(content):
-    if not OPENAI_API_KEY: return None
-    body={'model':MODEL,'input':[{'role':'user','content':content}],
-          'text':{'format':{'type':'json_schema','name':'transaction','strict':True,'schema':SCHEMA}},
-          'store':False}
-    r=requests.post('https://api.openai.com/v1/responses',headers={'Authorization':f'Bearer {OPENAI_API_KEY}','Content-Type':'application/json'},json=body,timeout=45)
-    r.raise_for_status(); data=r.json()
-    out=data.get('output_text','').strip()
-    return json.loads(out)
+def amount_from_text(text):
+    # Prefer a number that looks like a baht amount, including commas/decimals.
+    nums=re.findall(r'(?<!\d)(\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?|\d+(?:\.\d{1,2})?)(?!\d)', text)
+    if not nums: return None
+    vals=[float(x.replace(',','')) for x in nums]
+    # Ignore obvious dates/years when another plausible amount exists.
+    plausible=[v for v in vals if v < 10000000 and not (1900 <= v <= 2100)]
+    return plausible[-1] if plausible else vals[-1]
 
-def fallback(text, today):
-    nums=re.findall(r'(?<!\d)(\d+(?:[.,]\d{1,2})?)(?!\d)',text.replace(',',''))
-    amount=float(nums[-1]) if nums else None
-    lower=text.lower()
-    cat='อื่นๆ'
-    if any(x in text for x in ['กิน','ข้าว','กาแฟ','อาหาร','ชาบู','ร้านอาหาร','7-11','เซเว่น']): cat='อาหาร'
-    elif any(x in text for x in ['น้ำมัน','แท็กซี่','รถ','bts','mrt','เดินทาง']): cat='เดินทาง'
-    elif any(x in text for x in ['บ้าน','ค่าไฟ','ค่าน้ำ','ค่าเน็ต','ค่าโทรศัพท์']): cat='บ้าน' if 'บ้าน' in text else 'บิล/ค่าสาธารณูปโภค'
-    elif any(x in text for x in ['เงินเดือน','เงินเข้า','รายรับ','ได้รับ']): cat='เงินเดือน'; return {'type':'income','amount':amount,'category':cat,'merchant':'','note':text,'occurred_at':today}
-    elif any(x in text for x in ['ซื้อ','ช้อป','เสื้อ','ของ']): cat='ช้อปปิ้ง'
-    return {'type':'expense','amount':amount,'category':cat,'merchant':'','note':text,'occurred_at':today}
+def category_for(text, tx_type):
+    low=text.lower()
+    if tx_type=='income':
+        if any(k in low for k in ['เงินเดือน','salary','ค่าจ้าง','รายได้','โบนัส']): return 'เงินเดือน'
+        return 'อื่นๆ'
+    for cat, kws in KEYWORDS.items():
+        if any(k.lower() in low for k in kws): return cat
+    return 'อื่นๆ'
 
-def parse_text(text,today):
-    prompt=f'''Parse this Thai personal finance message into one transaction. Today is {today}. Infer relative dates. Amount must be numeric THB. If it says salary/received/money in, type income; otherwise expense. Choose the best category from {CATS}. Return only the schema JSON. Message: {text}'''
-    try: return call_ai(prompt) or fallback(text,today)
-    except Exception as e:
-        print('AI text fallback:',e); return fallback(text,today)
+def parse_text(text, today=None):
+    low=text.lower().strip()
+    income=bool(re.search(r'เงินเดือน|เงินเข้า|รายรับ|รายได้|รับเงิน|โบนัส|salary|income', low))
+    tx_type='income' if income else 'expense'
+    amount=amount_from_text(text)
+    # Simple date support: today / yesterday. Full natural-language dates stay manual in Free edition.
+    occurred_at=today or datetime.now().date().isoformat()
+    if 'เมื่อวาน' in text:
+        try:
+            from datetime import date,timedelta
+            occurred_at=(date.fromisoformat(occurred_at)-timedelta(days=1)).isoformat()
+        except Exception: pass
+    merchant=''
+    note=text.strip()
+    return {'type':tx_type,'amount':amount,'category':category_for(text,tx_type),'merchant':merchant,'note':note,'occurred_at':occurred_at}
 
-def parse_slip(image_bytes):
-    b64=base64.b64encode(image_bytes).decode()
-    prompt='''Read this Thai bank/payment slip and extract a single personal finance transaction. Use the transfer/payment amount, merchant or recipient if visible, and date/time if visible. Usually a payment slip means expense unless it clearly shows money received. Category should be one of the allowed categories. If uncertain amount, return null. Return only JSON schema.'''
-    content=[{'type':'input_text','text':prompt},{'type':'input_image','image_url':f'data:image/jpeg;base64,{b64}'}]
-    try: return call_ai(content) or {'amount':None}
-    except Exception as e: print('AI slip error:',e); return {'amount':None}
+def parse_slip(content: bytes):
+    # Free edition intentionally does not call a paid vision API.
+    # The bot asks the user to type the amount instead of pretending it read the image.
+    return {'type':'expense','amount':None,'category':'อื่นๆ','merchant':'','note':'','occurred_at':datetime.now().date().isoformat()}
