@@ -7,7 +7,8 @@ import requests
 
 from database import (init_db, upsert_user, create_household, join_household, get_active_household,
                       get_user_households, set_active_household, add_transaction, get_summary, get_recent,
-                      get_categories, delete_transaction, set_display_name, get_household, get_settlement)
+                      get_categories, delete_transaction, set_display_name, get_household, get_settlement,
+                      rename_household, delete_household, leave_household)
 from ai import parse_text, parse_slip
 from split_utils import parse_split_instruction
 from flex import summary_flex, transaction_flex, recent_flex, settlement_flex, help_text
@@ -15,7 +16,7 @@ from flex import summary_flex, transaction_flex, recent_flex, settlement_flex, h
 TZ = ZoneInfo(os.getenv('TZ', 'Asia/Bangkok'))
 LINE_CHANNEL_SECRET = os.getenv('LINE_CHANNEL_SECRET', '')
 LINE_ACCESS_TOKEN = os.getenv('LINE_ACCESS_TOKEN', '') or os.getenv('LINE_CHANNEL_ACCESS_TOKEN', '')
-app = FastAPI(title='MoneyMate LINE Bot')
+app = FastAPI(title='MeeTang LINE Bot')
 init_db()
 
 
@@ -60,6 +61,50 @@ def api_recent(limit: int = 30, user_id: str | None = None, household_id: int | 
 @app.get('/api/categories')
 def api_categories(): return get_categories()
 
+@app.get('/api/households')
+def api_households(user_id: str):
+    hs = get_user_households(user_id)
+    active = get_active_household(user_id)
+    return {'households': hs, 'active_household_id': active['id'] if active else None}
+
+@app.post('/api/households/create')
+async def api_create_household(request: Request):
+    data = await request.json()
+    user_id = str(data.get('user_id') or '').strip()
+    name = str(data.get('name') or '').strip()
+    if not user_id or not name:
+        raise HTTPException(status_code=400, detail='user_id and name are required')
+    return create_household(user_id, name)
+
+@app.post('/api/households/switch')
+async def api_switch_household(request: Request):
+    data = await request.json()
+    user_id = str(data.get('user_id') or '').strip()
+    household_id = int(data.get('household_id') or 0)
+    ok = bool(user_id and household_id and set_active_household(user_id, household_id))
+    return {'ok': ok, 'active': get_active_household(user_id) if ok else None}
+
+@app.post('/api/households/rename')
+async def api_rename_household(request: Request):
+    data = await request.json()
+    user_id = str(data.get('user_id') or '').strip()
+    household_id = int(data.get('household_id') or 0)
+    name = str(data.get('name') or '').strip()
+    ok = bool(user_id and household_id and name and rename_household(user_id, household_id, name))
+    return {'ok': ok, 'households': get_user_households(user_id)}
+
+@app.delete('/api/households/{household_id}')
+async def api_delete_household(household_id: int, user_id: str):
+    deleted = delete_household(user_id, household_id)
+    return {'ok': bool(deleted), 'deleted': deleted}
+
+@app.get('/api/households/{household_id}')
+def api_household(household_id: int, user_id: str):
+    h = get_household(household_id)
+    if not h or not any(m['user_id'] == user_id for m in h.get('members', [])):
+        raise HTTPException(status_code=403, detail='not a household member')
+    return h
+
 @app.delete('/api/transactions/{tx_id}')
 def api_delete(tx_id: int, user_id: str | None = None, household_id: int | None = None):
     return {'deleted': delete_transaction(tx_id, user_id=user_id, household_id=household_id)}
@@ -82,6 +127,18 @@ async def handle_event(event):
     msg = event.get('message', {})
     if msg.get('type') == 'text':
         text = msg.get('text', '').strip()
+        if text in ('รหัสของฉัน','my id','userid'):
+            reply(event['replyToken'], [{'type':'text','text':f'🪪 LINE User ID ของคุณ\n\n{user_id}\n\nใช้รหัสนี้เชื่อม Dashboard MeeTang ได้ครับ'}]); return
+        if text in ('บ้านของฉัน','จัดการบ้าน','บัญชีของฉัน','บัญชี','household'):
+            hs=get_user_households(user_id); active=get_active_household(user_id)
+            if not hs:
+                reply(event['replyToken'], [{'type':'text','text':'🏠 ยังไม่มีบ้าน\n\nกด “สร้างบ้าน” หรือพิมพ์\nสร้างบ้าน บ้านของเรา'}]); return
+            lines=['🏠 บ้านของฉัน','']
+            for i,h in enumerate(hs,1):
+                mark='⭐ กำลังใช้งาน' if active and h['id']==active['id'] else ''
+                lines.append(f'{i}. {h["name"]} {mark}'.strip())
+            lines += ['', 'เลือกบ้าน: ใช้บัญชี <ชื่อบ้าน>', 'สร้างใหม่: สร้างบ้าน <ชื่อบ้าน>', 'จัดการ: เปลี่ยนชื่อบ้าน <ชื่อใหม่>', 'ลบ: ลบบ้าน']
+            reply(event['replyToken'], [{'type':'text','text':'\n'.join(lines)}]); return
         if text.lower() in ('help','ช่วย','เมนู','menu','วิธีใช้'):
             reply(event['replyToken'], [{'type':'text','text':help_message()}]); return
         if text in ('เพิ่มรายการ','add'):
@@ -89,8 +146,13 @@ async def handle_event(event):
         if text in ('สแกนสลิป','scan'):
             reply(event['replyToken'], [{'type':'text','text':'📸 ส่งรูปสลิปเข้ามาได้เลย เดี๋ยวผมอ่านยอด ร้าน และวันที่ให้'}]); return
         if text in ('สร้างบ้าน','สร้างบัญชีร่วม','สร้าง household'):
-            h = create_household(user_id, 'บ้านของเรา')
-            reply(event['replyToken'], [{'type':'text','text':f'🏠 สร้างบัญชีร่วมแล้ว\nชื่อ: {h["name"]}\n\nรหัสเชิญ: {h["invite_code"]}\n\nส่งรหัสนี้ให้คนที่ต้องการเข้าบัญชีร่วมได้เลย'}]); return
+            reply(event['replyToken'], [{'type':'text','text':'🏠 สร้างบ้านใหม่\n\nพิมพ์ชื่อบ้านต่อท้ายได้เลย เช่น\n• สร้างบ้าน ร้านขนม\n• สร้างบ้าน บ้านแม่\n• สร้างบ้าน เที่ยวญี่ปุ่น\n\nใช้รูปแบบ “สร้างบ้าน ชื่อบ้าน” ครับ'}]); return
+        if text.startswith('สร้างบ้าน '):
+            name=text.split(None,1)[1].strip()
+            if not name:
+                reply(event['replyToken'], [{'type':'text','text':'กรุณาใส่ชื่อบ้าน เช่น “สร้างบ้าน ร้านขนม”'}]); return
+            h = create_household(user_id, name)
+            reply(event['replyToken'], [{'type':'text','text':f'🏠 สร้างบ้านใหม่แล้ว\nชื่อ: {h["name"]}\n\n⭐ ตอนนี้กำลังใช้งานบ้านนี้อยู่\nรหัสเชิญ: {h["invite_code"]}\n\nส่งรหัสนี้ให้คนที่ต้องการเข้าบัญชีร่วมได้เลย'}]); return
         if text.startswith('เข้าร่วม '):
             code=text.split(None,1)[1].strip()
             h=join_household(user_id,code)
@@ -109,17 +171,41 @@ async def handle_event(event):
                 name=m['display_name'] or f'สมาชิก {m["user_id"][-4:]}'
                 lines.append(f'{i}. {name}' + (' 👑' if m['role']=='owner' else ''))
             reply(event['replyToken'], [{'type':'text','text':'\n'.join(lines)}]); return
-        if text in ('บัญชีของฉัน','บัญชี','household'):
-            hs=get_user_households(user_id); active=get_active_household(user_id)
-            if not hs:
-                reply(event['replyToken'], [{'type':'text','text':'ตอนนี้ยังไม่มีบัญชีร่วม\nพิมพ์ “สร้างบ้าน” เพื่อสร้างบัญชีร่วม'}]); return
-            lines=['🏠 บัญชีของคุณ']
-            for h in hs: lines.append(f'• {h["name"]} — รหัส {h["invite_code"]}' + (' ⭐ ใช้งานอยู่' if active and h['id']==active['id'] else ''))
-            reply(event['replyToken'], [{'type':'text','text':'\n'.join(lines)}]); return
         if text.startswith('ใช้บัญชี '):
-            try: hid=int(text.split(None,1)[1]); ok=set_active_household(user_id,hid)
-            except: ok=False
-            reply(event['replyToken'], [{'type':'text','text':'สลับบัญชีเรียบร้อย ✅' if ok else 'สลับบัญชีไม่สำเร็จ'}]); return
+            target=text.split(None,1)[1].strip()
+            ok=False
+            if target.isdigit():
+                ok=set_active_household(user_id,int(target))
+            else:
+                hs=get_user_households(user_id)
+                match=next((x for x in hs if x['name'].strip().lower()==target.lower()), None)
+                ok=set_active_household(user_id,match['id']) if match else False
+            active=get_active_household(user_id)
+            reply(event['replyToken'], [{'type':'text','text':f'สลับไป “{active["name"]}” แล้ว ✅' if ok and active else 'ไม่พบบัญชีนี้ ลอง “บัญชีของฉัน” เพื่อดูชื่อบัญชี'}]); return
+        if text.startswith('เปลี่ยนชื่อบ้าน '):
+            h=get_active_household(user_id)
+            name=text.split(None,2)[2].strip()
+            ok=bool(h and rename_household(user_id,h['id'],name))
+            reply(event['replyToken'], [{'type':'text','text':f'เปลี่ยนชื่อบ้านเป็น “{name}” แล้ว ✅' if ok else 'เปลี่ยนชื่อไม่ได้ (ต้องเป็นเจ้าของบ้าน)'}]); return
+        if text in ('ลบบ้าน','ลบบัญชีร่วม'):
+            h=get_active_household(user_id)
+            if not h:
+                reply(event['replyToken'], [{'type':'text','text':'ตอนนี้ยังไม่มีบ้านที่กำลังใช้งานอยู่ครับ'}]); return
+            if h['owner_user_id'] != user_id:
+                reply(event['replyToken'], [{'type':'text','text':'บ้านนี้คุณไม่ได้เป็นเจ้าของ จึงลบไม่ได้ครับ\nถ้าต้องการออก ให้พิมพ์ “ออกจากบ้าน”'}]); return
+            reply(event['replyToken'], [{'type':'text','text':f'⚠️ ยืนยันการลบบ้าน “{h["name"]}” ?\n\nรายการและข้อมูลการหารเงินของบ้านนี้จะถูกลบทั้งหมด\n\nถ้ายืนยัน พิมพ์ “ยืนยันลบบ้าน”'}]); return
+        if text == 'ยืนยันลบบ้าน':
+            h=get_active_household(user_id)
+            if not h:
+                reply(event['replyToken'], [{'type':'text','text':'ไม่พบบ้านที่กำลังใช้งานอยู่ครับ'}]); return
+            if h['owner_user_id'] != user_id:
+                reply(event['replyToken'], [{'type':'text','text':'เฉพาะเจ้าของบ้านเท่านั้นที่ลบบ้านได้ครับ'}]); return
+            deleted=delete_household(user_id,h['id'])
+            reply(event['replyToken'], [{'type':'text','text':f'ลบบ้าน “{deleted["name"]}” เรียบร้อยแล้ว 🗑️' if deleted else 'ลบบ้านไม่สำเร็จ'}]); return
+        if text == 'ออกจากบ้าน':
+            h=get_active_household(user_id)
+            ok=bool(h and leave_household(user_id,h['id']))
+            reply(event['replyToken'], [{'type':'text','text':f'ออกจาก “{h["name"]}” แล้ว 🚪' if ok else 'ออกจากบ้านไม่ได้ ถ้าคุณเป็นเจ้าของบ้านให้ใช้ “ลบบ้าน” แทน'}]); return
         h,hid=active_scope(user_id)
         if any(k in text for k in ('สรุปค่าใช้จ่ายร่วม','ยอดร่วม','ใครจ่าย','เคลียร์ยอด','settlement')):
             if not h:

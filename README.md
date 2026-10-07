@@ -32,3 +32,10 @@ Start:
 
 Webhook:
 `https://YOUR-RENDER-DOMAIN/webhook`
+
+
+## UI / หลายบ้าน
+- Rich Menu 6 ปุ่ม: เพิ่มรายการ / สรุปเงิน / รายการล่าสุด / บ้านของฉัน / เคลียร์ยอด / วิธีใช้
+- Dashboard เลือกบ้านจาก dropdown ได้ และดูรายรับ-รายจ่ายแยกตามบ้าน
+- ใน LINE พิมพ์ `รหัสของฉัน` เพื่อรับ LINE User ID สำหรับเชื่อม Dashboard
+- สร้าง/สลับ/เปลี่ยนชื่อ/ลบบ้านได้จาก LINE และ Dashboard

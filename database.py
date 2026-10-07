@@ -75,6 +75,46 @@ def create_household(owner_user_id, name='บ้านของเรา'):
     raise RuntimeError('could not create household')
 
 
+
+def rename_household(user_id, household_id, name):
+    name = (name or '').strip()[:80]
+    if not name: return False
+    with conn() as c:
+        ok = c.execute('SELECT 1 FROM households WHERE id=? AND owner_user_id=?', (household_id, user_id)).fetchone()
+        if not ok: return False
+        c.execute('UPDATE households SET name=? WHERE id=?', (name, household_id))
+        c.commit(); return True
+
+
+def delete_household(user_id, household_id):
+    with conn() as c:
+        h = c.execute('SELECT * FROM households WHERE id=? AND owner_user_id=?', (household_id, user_id)).fetchone()
+        if not h: return None
+        member_ids = [r['user_id'] for r in c.execute('SELECT user_id FROM household_members WHERE household_id=?', (household_id,)).fetchall()]
+        c.execute('DELETE FROM transactions WHERE household_id=?', (household_id,))
+        c.execute('DELETE FROM household_members WHERE household_id=?', (household_id,))
+        c.execute('DELETE FROM user_active_household WHERE household_id=?', (household_id,))
+        c.execute('DELETE FROM households WHERE id=?', (household_id,))
+        for uid in member_ids:
+            nxt = c.execute("SELECT h.id FROM household_members hm JOIN households h ON h.id=hm.household_id WHERE hm.user_id=? ORDER BY h.created_at DESC LIMIT 1", (uid,)).fetchone()
+            if nxt:
+                c.execute('INSERT OR REPLACE INTO user_active_household(user_id,household_id) VALUES(?,?)', (uid, nxt['id']))
+        c.commit()
+        return dict(h)
+
+
+def leave_household(user_id, household_id):
+    with conn() as c:
+        h = c.execute('SELECT * FROM households WHERE id=?', (household_id,)).fetchone()
+        if not h or h['owner_user_id'] == user_id: return False
+        ok = c.execute('DELETE FROM household_members WHERE household_id=? AND user_id=?', (household_id, user_id)).rowcount > 0
+        c.execute('DELETE FROM user_active_household WHERE user_id=? AND household_id=?', (user_id, household_id))
+        if ok:
+            nxt = c.execute("SELECT h.id FROM household_members hm JOIN households h ON h.id=hm.household_id WHERE hm.user_id=? ORDER BY h.created_at DESC LIMIT 1", (user_id,)).fetchone()
+            if nxt:
+                c.execute('INSERT OR REPLACE INTO user_active_household(user_id,household_id) VALUES(?,?)', (user_id, nxt['id']))
+        c.commit(); return ok
+
 def join_household(user_id, invite_code):
     code = invite_code.strip().upper(); now = datetime.now(TZ).isoformat(timespec='seconds')
     with conn() as c:

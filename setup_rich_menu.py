@@ -18,11 +18,11 @@ menu={
   'chatBarText': '💰 MoneyMate',
   'areas': [
     {'bounds':{'x':0,'y':0,'width':833,'height':843},'action':{'type':'message','text':'เพิ่มรายการ'}},
-    {'bounds':{'x':833,'y':0,'width':834,'height':843},'action':{'type':'message','text':'สแกนสลิป'}},
-    {'bounds':{'x':1667,'y':0,'width':833,'height':843},'action':{'type':'message','text':'สรุปเดือนนี้'}},
-    {'bounds':{'x':0,'y':843,'width':833,'height':843},'action':{'type':'message','text':'รายการล่าสุด'}},
-    {'bounds':{'x':833,'y':843,'width':834,'height':843},'action':{'type':'message','text':'ช่วย'}},
-    {'bounds':{'x':1667,'y':843,'width':833,'height':843},'action':{'type':'uri','uri': PUBLIC_URL or 'https://example.com'}},
+    {'bounds':{'x':833,'y':0,'width':834,'height':843},'action':{'type':'message','text':'สรุปเดือนนี้'}},
+    {'bounds':{'x':1667,'y':0,'width':833,'height':843},'action':{'type':'message','text':'รายการล่าสุด'}},
+    {'bounds':{'x':0,'y':843,'width':833,'height':843},'action':{'type':'message','text':'บ้านของฉัน'}},
+    {'bounds':{'x':833,'y':843,'width':834,'height':843},'action':{'type':'message','text':'เคลียร์ยอด'}},
+    {'bounds':{'x':1667,'y':843,'width':833,'height':843},'action':{'type':'message','text':'ช่วย'}},
   ]
 }
 r=requests.post('https://api.line.me/v2/bot/richmenu',headers={**headers,'Content-Type':'application/json'},json=menu,timeout=30)
