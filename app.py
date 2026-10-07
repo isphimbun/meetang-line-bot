@@ -147,10 +147,7 @@ async def handle_event(event):
 
     if msg.get('type') == 'image':
         h,hid=active_scope(user_id)
-        reply(event['replyToken'], [{'type':'text','text':'📸 รับรูปแล้วครับ (โหมดฟรี)
-ตอนนี้ยังไม่ได้ใช้ AI อ่านสลิปอัตโนมัติ เพื่อไม่ให้มีค่า API
-
-พิมพ์ยอด เช่น “สลิป 350 ร้าน ABC” แล้วผมจะบันทึกให้ครับ 💰'}])
+        reply(event['replyToken'], [{'type':'text','text':'📸 รับรูปแล้วครับ (โหมดฟรี)\nตอนนี้ยังไม่ได้ใช้ AI อ่านสลิปอัตโนมัติ เพื่อไม่ให้มีค่า API\n\nพิมพ์ยอด เช่น “สลิป 350 ร้าน ABC” แล้วผมจะบันทึกให้ครับ 💰'}])
         parsed=parse_slip(get_line_content(msg['id']))
         reply(event['replyToken'], [{'type':'text','text':'โหมดฟรียังไม่อ่านยอดจากรูปอัตโนมัติครับ 😅\nพิมพ์ยอดตามหลังรูป เช่น “350 ร้าน ABC” แล้วผมจะบันทึกให้'}]); return
         split_mode='self'; participants=[user_id]; split_amounts=None
