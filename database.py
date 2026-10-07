@@ -6,6 +6,16 @@ DB_PATH = os.getenv('DATABASE_PATH', 'moneymate.db')
 TZ = ZoneInfo(os.getenv('TZ', 'Asia/Bangkok'))
 CATEGORIES = ['อาหาร','บ้าน','เดินทาง','ช้อปปิ้ง','บิล/ค่าสาธารณูปโภค','สุขภาพ','บันเทิง','ท่องเที่ยว','เงินออม/ลงทุน','เงินเดือน','ธุรกิจ','อื่นๆ']
 
+DEFAULT_COMMANDS = [
+    ('เพิ่มรายการ', 'เพิ่มรายการ,add', 'help', 'เปิดวิธีบันทึกรายรับ/รายจ่าย'),
+    ('สรุป', 'สรุป,summary,เดือนนี้', 'summary', 'สรุปการเงินเดือนนี้'),
+    ('รายการล่าสุด', 'รายการล่าสุด,รายการ,recent', 'recent', 'ดูรายการล่าสุด'),
+    ('ลบรายการล่าสุด', 'ลบรายการล่าสุด', 'delete_latest', 'ลบรายการล่าสุด'),
+    ('ฝากเงิน', 'ฝากเงิน,ฝาก', 'income', 'บันทึกเงินฝาก/เงินเข้า'),
+    ('ถอนเงิน', 'ถอนเงิน,ถอน', 'expense', 'บันทึกเงินถอน/เงินออก'),
+    ('เงินเดือน', 'เงินเดือน', 'income', 'บันทึกรายรับจากเงินเดือน'),
+]
+
 
 def conn():
     c = sqlite3.connect(DB_PATH)
@@ -42,6 +52,22 @@ def init_db():
             if col not in cols: c.execute(sql)
         c.execute('CREATE INDEX IF NOT EXISTS idx_tx_user_date ON transactions(user_id, occurred_at)')
         c.execute('CREATE INDEX IF NOT EXISTS idx_tx_house_date ON transactions(household_id, occurred_at)')
+        c.execute('''CREATE TABLE IF NOT EXISTS bot_commands (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            aliases TEXT NOT NULL,
+            action TEXT NOT NULL,
+            description TEXT DEFAULT '',
+            enabled INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )''')
+        count = c.execute('SELECT COUNT(*) FROM bot_commands').fetchone()[0]
+        if count == 0:
+            now = datetime.now(TZ).isoformat(timespec='seconds')
+            for name, aliases, action, description in DEFAULT_COMMANDS:
+                c.execute('INSERT INTO bot_commands(name,aliases,action,description,enabled,created_at,updated_at) VALUES(?,?,?,?,?,?,?)',
+                          (name, aliases, action, description, 1, now, now))
         c.commit()
 
 
@@ -250,3 +276,45 @@ def get_settlement(household_id, month=None):
         if debtors[i][1] <= 0.005: i+=1
         if creditors[j][1] <= 0.005: j+=1
     return {'month':month, 'members':[{'user_id':u,'name':members[u],'paid':round(paid.get(u,0),2),'owed':round(owed.get(u,0),2),'net':net[u]} for u in members], 'net':net, 'transfers':transfers}
+
+
+def get_commands(enabled_only=False):
+    with conn() as c:
+        q = 'SELECT * FROM bot_commands'
+        if enabled_only: q += ' WHERE enabled=1'
+        rows = c.execute(q + ' ORDER BY id').fetchall()
+    return [dict(r) for r in rows]
+
+
+def add_command(name, aliases, action='custom', description='', enabled=True):
+    name=(name or '').strip()[:80]; aliases=(aliases or '').strip()[:300]
+    if not name or not aliases: raise ValueError('name and aliases are required')
+    now=datetime.now(TZ).isoformat(timespec='seconds')
+    with conn() as c:
+        cur=c.execute('INSERT INTO bot_commands(name,aliases,action,description,enabled,created_at,updated_at) VALUES(?,?,?,?,?,?,?)',
+                      (name,aliases,action,(description or '').strip()[:200],1 if enabled else 0,now,now))
+        row=c.execute('SELECT * FROM bot_commands WHERE id=?',(cur.lastrowid,)).fetchone(); c.commit(); return dict(row)
+
+
+def update_command(command_id, name, aliases, action='custom', description='', enabled=True):
+    now=datetime.now(TZ).isoformat(timespec='seconds')
+    with conn() as c:
+        c.execute('UPDATE bot_commands SET name=?,aliases=?,action=?,description=?,enabled=?,updated_at=? WHERE id=?',
+                  ((name or '').strip()[:80],(aliases or '').strip()[:300],action,(description or '').strip()[:200],1 if enabled else 0,now,command_id))
+        row=c.execute('SELECT * FROM bot_commands WHERE id=?',(command_id,)).fetchone(); c.commit(); return dict(row) if row else None
+
+
+def delete_command(command_id):
+    with conn() as c:
+        cur=c.execute('DELETE FROM bot_commands WHERE id=?',(command_id,)); c.commit(); return cur.rowcount>0
+
+
+def find_command(text):
+    t=(text or '').strip().lower()
+    commands=get_commands(True)
+    for cmd in commands:
+        for alias in cmd['aliases'].split(','):
+            a=alias.strip().lower()
+            if a and (t==a or t.startswith(a+' ')):
+                return cmd, t[len(a):].strip()
+    return None, ''

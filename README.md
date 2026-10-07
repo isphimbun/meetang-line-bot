@@ -27,3 +27,11 @@ The app creates/activates `MeeTang Main Menu v5` automatically on startup. LINE 
 ## Dashboard
 Open the Render service root URL, for example `https://your-service.onrender.com/`.
 The first time, enter the LINE User ID returned by the bot command `รหัสของฉัน`.
+
+
+## v6 — จัดการคำสั่งจาก Dashboard
+- Dashboard > ตั้งค่า > คำสั่งบอท สามารถเพิ่ม/แก้ไข/เปิด-ปิด/ลบคำสั่งได้โดยไม่ต้องแก้โค้ด
+- คำสั่งที่สร้างได้รองรับ action: เงินเข้า, เงินออก, สรุป, รายการล่าสุด, ลบรายการล่าสุด, วิธีใช้
+- เพิ่มคำสั่งเริ่มต้น `ฝากเงิน` และ `ถอนเงิน`
+- ฟรีเวอร์ชันยังไม่ใช้ OpenAI/OCR
+- **สำคัญ:** เวอร์ชันนี้ยังใช้ SQLite (`moneymate.db`) หาก Render ไม่มี persistent disk ข้อมูลอาจหายเมื่อมีการสร้าง instance ใหม่/ล้าง filesystem ดังนั้นก่อนใช้งานจริงควรย้าย DB ไปบริการฐานข้อมูลถาวร เช่น PostgreSQL/Supabase

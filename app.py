@@ -7,6 +7,7 @@ import requests
 
 from database import (init_db, upsert_user, create_household, join_household, get_active_household,
                       get_user_households, set_active_household, add_transaction, get_summary, get_recent,
+                      get_commands, add_command, update_command, delete_command, find_command,
                       get_categories, delete_transaction, set_display_name, get_household, get_settlement,
                       rename_household, delete_household, leave_household)
 from ai import parse_text, parse_slip
@@ -174,6 +175,27 @@ def api_household(household_id: int, user_id: str):
 def api_delete(tx_id: int, user_id: str | None = None, household_id: int | None = None):
     return {'deleted': delete_transaction(tx_id, user_id=user_id, household_id=household_id)}
 
+@app.get('/api/commands')
+def api_commands():
+    return {'commands': get_commands()}
+
+@app.post('/api/commands')
+def api_add_command(payload: dict):
+    try:
+        return add_command(payload.get('name',''), payload.get('aliases',''), payload.get('action','custom'), payload.get('description',''), bool(payload.get('enabled',True)))
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.put('/api/commands/{command_id}')
+def api_update_command(command_id: int, payload: dict):
+    row=update_command(command_id, payload.get('name',''), payload.get('aliases',''), payload.get('action','custom'), payload.get('description',''), bool(payload.get('enabled',True)))
+    if not row: raise HTTPException(status_code=404, detail='command not found')
+    return row
+
+@app.delete('/api/commands/{command_id}')
+def api_delete_command(command_id: int):
+    return {'ok': delete_command(command_id)}
+
 @app.post('/webhook')
 async def webhook(request: Request):
     body = await request.body()
@@ -201,6 +223,28 @@ async def handle_event(event):
             reply(event['replyToken'], [household_flex(hs, active)]); return
         if text.lower() in ('help','ช่วย','เมนู','menu','วิธีใช้'):
             reply(event['replyToken'], [{'type':'text','text':help_message()}]); return
+        cmd, arg = find_command(text)
+        if cmd and cmd['action'] == 'help':
+            reply(event['replyToken'], [{'type':'text','text':help_message()}]); return
+        if cmd and cmd['action'] == 'summary' and not arg:
+            h,hid=active_scope(user_id); reply(event['replyToken'], [summary_flex(get_summary(user_id=user_id, household_id=hid), h)]); return
+        if cmd and cmd['action'] == 'recent' and not arg:
+            h,hid=active_scope(user_id); reply(event['replyToken'], [recent_flex(get_recent(10,user_id=user_id,household_id=hid), h)]); return
+        if cmd and cmd['action'] in ('income','expense') and arg:
+            h,hid=active_scope(user_id)
+            parsed=parse_text(arg,datetime.now(TZ).date().isoformat())
+            if not parsed.get('amount'):
+                reply(event['replyToken'], [{'type':'text','text':f'ลองพิมพ์ เช่น “{cmd["name"]} 5000” ครับ'}]); return
+            parsed['type']=cmd['action']
+            if cmd['action']=='income': parsed['category']='เงินออม/ลงทุน' if cmd['name']=='ฝากเงิน' else (parsed.get('category') or 'อื่นๆ')
+            if cmd['action']=='expense': parsed['category']='เงินออม/ลงทุน' if cmd['name']=='ถอนเงิน' else (parsed.get('category') or 'อื่นๆ')
+            tx=add_transaction(user_id=user_id, household_id=hid, source='command', original_text=text, payer_user_id=user_id, **parsed)
+            payer_name=next((m.get('display_name') for m in (h or {}).get('members',[]) if m['user_id']==user_id), None)
+            reply(event['replyToken'], [transaction_flex(tx,h,payer_name)]); return
+        if cmd and cmd['action'] == 'delete_latest' and not arg:
+            h,hid=active_scope(user_id); rows=get_recent(1,user_id=user_id,household_id=hid)
+            ok=bool(rows and delete_transaction(rows[0]['id'],user_id=user_id,household_id=hid))
+            reply(event['replyToken'], [{'type':'text','text':'ลบรายการล่าสุดเรียบร้อย 🗑️' if ok else 'ยังไม่มีรายการให้ลบครับ'}]); return
         if text in ('เพิ่มรายการ','add'):
             reply(event['replyToken'], [{'type':'text','text':'💰 เพิ่มรายการ\n\nพิมพ์ได้เลย เช่น\n• กินข้าว 120\n• เติมน้ำมัน 500\n• เงินเดือนเข้า 30000\n\nMeeTang จะบันทึกเข้าบ้านที่กำลังใช้งานอยู่ครับ 🐰'}]); return
         if text in ('สแกนสลิป','scan'):
@@ -292,10 +336,7 @@ async def handle_event(event):
         reply(event['replyToken'], [transaction_flex(tx,h,payer_name)]); return
 
     if msg.get('type') == 'image':
-        h,hid=active_scope(user_id)
-        reply(event['replyToken'], [{'type':'text','text':'📸 รับรูปแล้วครับ (โหมดฟรี)\nตอนนี้ยังไม่ได้ใช้ AI อ่านสลิปอัตโนมัติ เพื่อไม่ให้มีค่า API\n\nพิมพ์ยอด เช่น “สลิป 350 ร้าน ABC” แล้วผมจะบันทึกให้ครับ 💰'}])
-        parsed=parse_slip(get_line_content(msg['id']))
-        reply(event['replyToken'], [{'type':'text','text':'โหมดฟรียังไม่อ่านยอดจากรูปอัตโนมัติครับ 😅\nพิมพ์ยอดตามหลังรูป เช่น “350 ร้าน ABC” แล้วผมจะบันทึกให้'}]); return
+        reply(event['replyToken'], [{'type':'text','text':'📸 รับรูปแล้วครับ (โหมดฟรี)\nตอนนี้ยังไม่ได้ใช้ AI อ่านสลิปอัตโนมัติ เพื่อไม่ให้มีค่า API\n\nพิมพ์ยอดตามหลังรูป เช่น “350 ร้าน ABC” แล้วผมจะบันทึกให้ครับ 💰'}]); return
         split_mode='self'; participants=[user_id]; split_amounts=None
         split=parse_split_instruction(parsed.get('note',''),h,user_id) if h else None
         if split:
