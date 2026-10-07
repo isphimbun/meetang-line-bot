@@ -446,8 +446,28 @@ def add_mortgage_payment(user_id, household_id, data):
     if not user_has_feature(user_id, household_id, 'loan'): return None
     m=get_mortgage(household_id)
     if not m: return None
+    amount=float(data.get('amount') or 0)
+    extra=float(data.get('extra_principal') or 0)
+    if amount<=0: return None
+    # Calculate the current outstanding principal from previously recorded payments.
+    paid_principal=sum(float(x.get('principal') or 0)+float(x.get('extra_principal') or 0) for x in m.get('payments',[]))
+    balance=max(0.0,float(m.get('loan_amount') or 0)-paid_principal)
+    payment_date=data.get('payment_date') or datetime.now(TZ).date().isoformat()
+    rate=_rate_for_month(m,payment_date[:7])
+    interest=float(data.get('interest') or 0)
+    principal=float(data.get('principal') or 0)
+    # User only needs to enter the amount paid. Fill principal/interest automatically.
+    if interest<=0:
+        interest=round(balance*rate/100/12,2)
+    if principal<=0:
+        principal=round(max(0.0,amount-interest-extra),2)
+    if amount < interest:
+        raise ValueError(f'ยอดจ่าย {amount:,.2f} ต่ำกว่าดอกเบี้ยงวดนี้ประมาณ {interest:,.2f}')
+    if principal+extra>balance:
+        extra=max(0.0,round(balance-principal,2))
+        principal=round(max(0.0,balance-extra),2)
     with conn() as c:
-        cur=c.execute('INSERT INTO mortgage_payments(mortgage_id,payment_date,amount,principal,interest,extra_principal,note) VALUES(?,?,?,?,?,?,?)',(m['id'],data.get('payment_date') or datetime.now(TZ).date().isoformat(),float(data.get('amount') or 0),float(data.get('principal') or 0),float(data.get('interest') or 0),float(data.get('extra_principal') or 0),data.get('note','')))
+        cur=c.execute('INSERT INTO mortgage_payments(mortgage_id,payment_date,amount,principal,interest,extra_principal,note) VALUES(?,?,?,?,?,?,?)',(m['id'],payment_date,amount,principal,interest,extra,data.get('note','')))
         c.commit()
     return get_mortgage(household_id)
 

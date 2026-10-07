@@ -256,6 +256,24 @@ def api_loan(user_id: str, household_id: int):
     ins=get_house_insurance(household_id)
     exp=get_house_expenses(household_id)
     forecast=mortgage_forecast(m, int((m or {}).get('term_years') or 30)*12) if m else []
+    # Overlay recorded real payments on the forecast so the UI reflects actual payments.
+    if m and forecast and m.get('payments'):
+        running=float(m.get('loan_amount') or 0)
+        for i, p in enumerate(m.get('payments', [])):
+            if i >= len(forecast): break
+            principal=float(p.get('principal') or 0)
+            extra=float(p.get('extra_principal') or 0)
+            interest=float(p.get('interest') or 0)
+            paid=float(p.get('amount') or 0)
+            running=max(0.0, running-principal-extra)
+            forecast[i] = {**forecast[i], 'date': p.get('payment_date') or forecast[i].get('date'), 'payment': paid, 'principal': principal, 'extra_principal': extra, 'interest': interest, 'balance': round(running,2), 'actual': True}
+        # Recalculate future forecast from the actual current balance.
+        last_actual=len(m.get('payments', []))
+        if last_actual < len(forecast):
+            future=mortgage_forecast({**m,'loan_amount':running,'start_date':forecast[last_actual-1].get('date') if last_actual else m.get('start_date')}, len(forecast)-last_actual)
+            for j,row in enumerate(future):
+                row['no']=last_actual+j+1
+                forecast[last_actual+j]=row
     paid_principal=sum(float(x.get('principal') or 0) + float(x.get('extra_principal') or 0) for x in (m or {}).get('payments',[]))
     paid_interest=sum(float(x.get('interest') or 0) for x in (m or {}).get('payments',[]))
     actual_balance=max(0, float((m or {}).get('loan_amount') or 0)-paid_principal)
@@ -277,8 +295,11 @@ async def api_save_loan(request: Request):
 async def api_loan_payment(request: Request):
     payload=await request.json(); user_id=str(payload.get('user_id') or '').strip(); hid=int(payload.get('household_id') or 0)
     if not user_id or not hid or not user_has_feature(user_id,hid,'loan'): raise HTTPException(status_code=403, detail='loan feature disabled')
-    row=add_mortgage_payment(user_id,hid,payload)
-    if row is None: raise HTTPException(status_code=400, detail='no mortgage')
+    try:
+        row=add_mortgage_payment(user_id,hid,payload)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if row is None: raise HTTPException(status_code=400, detail='no mortgage or invalid payment')
     return row
 
 @app.post('/api/loan/insurance')
