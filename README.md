@@ -1,37 +1,24 @@
-# MeeTang — Free Multi-House v5
+# MeeTang v8 — Command Manager + Safe Database Backup
 
-MeeTang is a LINE finance bot with a pastel kawaii Rich Menu and a matching web Dashboard.
+## Important
+This version is designed to be non-destructive to the existing SQLite database. It does **not** delete or reset `moneymate.db` and uses `CREATE TABLE IF NOT EXISTS` migrations.
 
-## Included
-- LINE text expense/income entry
-- Monthly summary and recent transactions as Flex messages
-- Multiple households / accounts
-- Create, switch, rename, delete, and leave households
-- Shared expense settlement
-- Free mode: receipt images are accepted, but automatic OCR/AI extraction is disabled
-- Pastel 6-button Rich Menu matching the MeeTang visual design
-- Matching web Dashboard at `/`
+### Dashboard
+- 🤖 Command Manager: add/edit/enable/disable/delete bot commands without redeploying.
+- 💾 Database backup: `/api/backup/database` downloads a copy of the live SQLite DB.
+- 🔎 Backup status: `/api/backup/status` reports whether the configured DB file exists and its size.
 
-## Required Render environment variables
-- `LINE_CHANNEL_SECRET`
-- `LINE_CHANNEL_ACCESS_TOKEN`
+### Default commands
+- ฝากเงิน / ฝาก → income
+- ถอนเงิน / ถอน → expense
+- เงินเดือน → income
+- สรุป → summary
+- รายการล่าสุด → recent
+- ลบรายการล่าสุด → delete latest
 
-`LINE_ACCESS_TOKEN` is also accepted for compatibility.
+## Critical Render warning
+If this service uses Render ephemeral filesystem, a redeploy/restart can remove local SQLite files. Do not assume the database survives deployment. Before a production migration, use the backup endpoint on the currently running version if it exists, or migrate the data to persistent external storage.
 
-## Render start command
-`uvicorn app:app --host 0.0.0.0 --port $PORT`
-
-## Rich Menu
-The app creates/activates `MeeTang Main Menu v5` automatically on startup. LINE Rich Menus are created through the Messaging API; the menu image is uploaded and then set as the default menu.
-
-## Dashboard
-Open the Render service root URL, for example `https://your-service.onrender.com/`.
-The first time, enter the LINE User ID returned by the bot command `รหัสของฉัน`.
-
-
-## v6 — จัดการคำสั่งจาก Dashboard
-- Dashboard > ตั้งค่า > คำสั่งบอท สามารถเพิ่ม/แก้ไข/เปิด-ปิด/ลบคำสั่งได้โดยไม่ต้องแก้โค้ด
-- คำสั่งที่สร้างได้รองรับ action: เงินเข้า, เงินออก, สรุป, รายการล่าสุด, ลบรายการล่าสุด, วิธีใช้
-- เพิ่มคำสั่งเริ่มต้น `ฝากเงิน` และ `ถอนเงิน`
-- ฟรีเวอร์ชันยังไม่ใช้ OpenAI/OCR
-- **สำคัญ:** เวอร์ชันนี้ยังใช้ SQLite (`moneymate.db`) หาก Render ไม่มี persistent disk ข้อมูลอาจหายเมื่อมีการสร้าง instance ใหม่/ล้าง filesystem ดังนั้นก่อนใช้งานจริงควรย้าย DB ไปบริการฐานข้อมูลถาวร เช่น PostgreSQL/Supabase
+## Required environment variables
+- LINE_CHANNEL_SECRET
+- LINE_CHANNEL_ACCESS_TOKEN (or LINE_ACCESS_TOKEN)
