@@ -11,7 +11,7 @@ from database import (init_db, upsert_user, create_household, join_household, ge
                       rename_household, delete_household, leave_household)
 from ai import parse_text, parse_slip
 from split_utils import parse_split_instruction
-from flex import summary_flex, transaction_flex, recent_flex, settlement_flex, help_text
+from flex import summary_flex, transaction_flex, recent_flex, settlement_flex, household_flex, help_text
 
 TZ = ZoneInfo(os.getenv('TZ', 'Asia/Bangkok'))
 LINE_CHANNEL_SECRET = os.getenv('LINE_CHANNEL_SECRET', '')
@@ -35,7 +35,7 @@ def setup_rich_menu_on_startup():
         existing = requests.get('https://api.line.me/v2/bot/richmenu/list', headers=headers, timeout=20)
         existing.raise_for_status()
         menus = existing.json().get('richmenus', [])
-        menu = next((m for m in menus if m.get('name') == 'MeeTang Main Menu'), None)
+        menu = next((m for m in menus if m.get('name') == 'MeeTang Main Menu v5'), None)
 
         if menu:
             menu_id = menu['richMenuId']
@@ -44,8 +44,8 @@ def setup_rich_menu_on_startup():
             menu_data = {
                 'size': {'width': 2500, 'height': 1686},
                 'selected': True,
-                'name': 'MeeTang Main Menu',
-                'chatBarText': '💰 MeeTang',
+                'name': 'MeeTang Main Menu v5',
+                'chatBarText': '💰 มีตังค์',
                 'areas': [
                     {'bounds': {'x': 0, 'y': 0, 'width': 833, 'height': 843}, 'action': {'type': 'message', 'text': 'เพิ่มรายการ'}},
                     {'bounds': {'x': 833, 'y': 0, 'width': 834, 'height': 843}, 'action': {'type': 'message', 'text': 'สรุปเดือนนี้'}},
@@ -60,13 +60,17 @@ def setup_rich_menu_on_startup():
             menu_id = r.json()['richMenuId']
             print('Rich Menu: created', menu_id)
 
-        with open(image_path, 'rb') as f:
-            r = requests.post(
-                f'https://api-data.line.me/v2/bot/richmenu/{menu_id}/content',
-                headers={**headers, 'Content-Type': 'image/png'},
-                data=f, timeout=60
-            )
-            r.raise_for_status()
+        # LINE does not allow replacing an image already attached to a rich menu.
+        # Upload only when we just created the menu.
+        if not menu:
+            content_type = 'image/jpeg' if image_path.lower().endswith(('.jpg', '.jpeg')) else 'image/png'
+            with open(image_path, 'rb') as f:
+                r = requests.post(
+                    f'https://api-data.line.me/v2/bot/richmenu/{menu_id}/content',
+                    headers={**headers, 'Content-Type': content_type},
+                    data=f, timeout=60
+                )
+                r.raise_for_status()
 
         r = requests.post(f'https://api.line.me/v2/bot/user/all/richmenu/{menu_id}', headers=headers, timeout=20)
         r.raise_for_status()
@@ -193,17 +197,12 @@ async def handle_event(event):
         if text in ('บ้านของฉัน','จัดการบ้าน','บัญชีของฉัน','บัญชี','household'):
             hs=get_user_households(user_id); active=get_active_household(user_id)
             if not hs:
-                reply(event['replyToken'], [{'type':'text','text':'🏠 ยังไม่มีบ้าน\n\nกด “สร้างบ้าน” หรือพิมพ์\nสร้างบ้าน บ้านของเรา'}]); return
-            lines=['🏠 บ้านของฉัน','']
-            for i,h in enumerate(hs,1):
-                mark='⭐ กำลังใช้งาน' if active and h['id']==active['id'] else ''
-                lines.append(f'{i}. {h["name"]} {mark}'.strip())
-            lines += ['', 'เลือกบ้าน: ใช้บัญชี <ชื่อบ้าน>', 'สร้างใหม่: สร้างบ้าน <ชื่อบ้าน>', 'จัดการ: เปลี่ยนชื่อบ้าน <ชื่อใหม่>', 'ลบ: ลบบ้าน']
-            reply(event['replyToken'], [{'type':'text','text':'\n'.join(lines)}]); return
+                reply(event['replyToken'], [{'type':'text','text':'🏠 ยังไม่มีบ้าน\n\nพิมพ์ “สร้างบ้าน บ้านของเรา” หรือกดปุ่มสร้างบ้านจากเมนูได้เลยครับ'}]); return
+            reply(event['replyToken'], [household_flex(hs, active)]); return
         if text.lower() in ('help','ช่วย','เมนู','menu','วิธีใช้'):
             reply(event['replyToken'], [{'type':'text','text':help_message()}]); return
         if text in ('เพิ่มรายการ','add'):
-            reply(event['replyToken'], [{'type':'text','text':'พิมพ์ได้เลย เช่น\n• กินข้าว 120\n• เติมน้ำมัน 500\n• เงินเดือนเข้า 30000'}]); return
+            reply(event['replyToken'], [{'type':'text','text':'💰 เพิ่มรายการ\n\nพิมพ์ได้เลย เช่น\n• กินข้าว 120\n• เติมน้ำมัน 500\n• เงินเดือนเข้า 30000\n\nMeeTang จะบันทึกเข้าบ้านที่กำลังใช้งานอยู่ครับ 🐰'}]); return
         if text in ('สแกนสลิป','scan'):
             reply(event['replyToken'], [{'type':'text','text':'📸 ส่งรูปสลิปเข้ามาได้เลย เดี๋ยวผมอ่านยอด ร้าน และวันที่ให้'}]); return
         if text in ('สร้างบ้าน','สร้างบัญชีร่วม','สร้าง household'):
