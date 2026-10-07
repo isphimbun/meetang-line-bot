@@ -20,6 +20,67 @@ app = FastAPI(title='MeeTang LINE Bot')
 init_db()
 
 
+def setup_rich_menu_on_startup():
+    """Create and activate MeeTang's Rich Menu automatically on deploy/startup."""
+    if not LINE_ACCESS_TOKEN:
+        print('Rich Menu: skipped (LINE access token is missing)')
+        return
+    image_path = os.path.join(os.path.dirname(__file__), 'rich_menu.png')
+    if not os.path.exists(image_path):
+        print('Rich Menu: skipped (rich_menu.png is missing)')
+        return
+    headers = {'Authorization': f'Bearer {LINE_ACCESS_TOKEN}'}
+    try:
+        # Reuse an existing MeeTang menu if it already exists; otherwise create it.
+        existing = requests.get('https://api.line.me/v2/bot/richmenu/list', headers=headers, timeout=20)
+        existing.raise_for_status()
+        menus = existing.json().get('richmenus', [])
+        menu = next((m for m in menus if m.get('name') == 'MeeTang Main Menu'), None)
+
+        if menu:
+            menu_id = menu['richMenuId']
+            print('Rich Menu: using existing', menu_id)
+        else:
+            menu_data = {
+                'size': {'width': 2500, 'height': 1686},
+                'selected': True,
+                'name': 'MeeTang Main Menu',
+                'chatBarText': '💰 MeeTang',
+                'areas': [
+                    {'bounds': {'x': 0, 'y': 0, 'width': 833, 'height': 843}, 'action': {'type': 'message', 'text': 'เพิ่มรายการ'}},
+                    {'bounds': {'x': 833, 'y': 0, 'width': 834, 'height': 843}, 'action': {'type': 'message', 'text': 'สรุปเดือนนี้'}},
+                    {'bounds': {'x': 1667, 'y': 0, 'width': 833, 'height': 843}, 'action': {'type': 'message', 'text': 'รายการล่าสุด'}},
+                    {'bounds': {'x': 0, 'y': 843, 'width': 833, 'height': 843}, 'action': {'type': 'message', 'text': 'บ้านของฉัน'}},
+                    {'bounds': {'x': 833, 'y': 843, 'width': 834, 'height': 843}, 'action': {'type': 'message', 'text': 'เคลียร์ยอด'}},
+                    {'bounds': {'x': 1667, 'y': 843, 'width': 833, 'height': 843}, 'action': {'type': 'message', 'text': 'ช่วย'}},
+                ]
+            }
+            r = requests.post('https://api.line.me/v2/bot/richmenu', headers={**headers, 'Content-Type': 'application/json'}, json=menu_data, timeout=20)
+            r.raise_for_status()
+            menu_id = r.json()['richMenuId']
+            print('Rich Menu: created', menu_id)
+
+        with open(image_path, 'rb') as f:
+            r = requests.post(
+                f'https://api-data.line.me/v2/bot/richmenu/{menu_id}/content',
+                headers={**headers, 'Content-Type': 'image/png'},
+                data=f, timeout=60
+            )
+            r.raise_for_status()
+
+        r = requests.post(f'https://api.line.me/v2/bot/user/all/richmenu/{menu_id}', headers=headers, timeout=20)
+        r.raise_for_status()
+        print('Rich Menu: activated successfully')
+    except Exception as e:
+        # Never prevent the bot from starting if LINE's Rich Menu API has a temporary issue.
+        print('Rich Menu setup error:', repr(e))
+
+
+@app.on_event('startup')
+async def startup_tasks():
+    setup_rich_menu_on_startup()
+
+
 def verify_signature(body: bytes, signature: str) -> bool:
     if not LINE_CHANNEL_SECRET: return True
     digest = hmac.new(LINE_CHANNEL_SECRET.encode(), body, hashlib.sha256).digest()

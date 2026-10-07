@@ -1,7 +1,7 @@
 import os, json, requests
 from pathlib import Path
 
-TOKEN = os.getenv('LINE_ACCESS_TOKEN','')
+TOKEN = os.getenv('LINE_ACCESS_TOKEN','') or os.getenv('LINE_CHANNEL_ACCESS_TOKEN','')
 PUBLIC_URL = os.getenv('PUBLIC_URL','').rstrip('/')
 IMAGE = Path(__file__).parent / 'rich_menu.png'
 
