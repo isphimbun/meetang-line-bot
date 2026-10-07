@@ -479,6 +479,26 @@ def _rate_for_month(mortgage, ym):
         return float(mortgage.get('current_mrr') or 0)+float(rr.get('mrr_offset') or 0)
     return float(rr.get('rate_percent') or 0) if rr else 0.0
 
+def update_mortgage_payment(user_id, household_id, data):
+    if not is_household_admin(user_id, household_id): return None
+    pid=int(data.get('id') or 0); m=get_mortgage(household_id)
+    if not m: return None
+    payment_date=data.get('payment_date') or datetime.now(TZ).date().isoformat(); amount=float(data.get('amount') or 0); extra=float(data.get('extra_principal') or 0)
+    if amount<=0: return None
+    with conn() as c:
+        prior=c.execute('SELECT COALESCE(SUM(principal+extra_principal),0) AS v FROM mortgage_payments WHERE mortgage_id=? AND id<>? AND payment_date<?',(m['id'],pid,payment_date)).fetchone()['v']
+    balance=max(0,float(m['loan_amount'] or 0)-float(prior or 0)); rate=_rate_for_month(m,payment_date[:7]); interest=float(data.get('interest') or 0) or round(balance*rate/100/12,2); principal=float(data.get('principal') or 0) or round(max(0,amount-interest-extra),2)
+    if amount<interest: raise ValueError(f'ยอดจ่าย {amount:,.2f} ต่ำกว่าดอกเบี้ยประมาณ {interest:,.2f}')
+    principal=min(principal,max(0,balance-extra))
+    with conn() as c:
+        c.execute('UPDATE mortgage_payments SET payment_date=?,amount=?,principal=?,interest=?,extra_principal=?,note=? WHERE id=? AND mortgage_id=?',(payment_date,amount,principal,interest,extra,data.get('note',''),pid,m['id'])); c.commit()
+    return get_mortgage(household_id)
+
+def delete_mortgage_payment(user_id, household_id, payment_id):
+    if not is_household_admin(user_id, household_id): return False
+    with conn() as c:
+        cur=c.execute('DELETE FROM mortgage_payments WHERE id=? AND mortgage_id IN (SELECT id FROM mortgages WHERE household_id=?)',(int(payment_id),household_id)); c.commit(); return cur.rowcount>0
+
 def get_house_insurance(household_id):
     with conn() as c:
         rows=[dict(r) for r in c.execute('SELECT * FROM house_insurance WHERE household_id=? ORDER BY due_date,id',(household_id,)).fetchall()]
@@ -504,15 +524,56 @@ def save_house_insurance(user_id, household_id, data):
 def add_house_insurance(user_id, household_id, data):
     return save_house_insurance(user_id, household_id, data)
 
+def _insurance_payment_calc(ins, mortgage, payment_date, amount, principal, interest, exclude_id=0):
+    with conn() as c:
+        rows=c.execute('SELECT * FROM house_insurance_payments WHERE insurance_id=? AND id<>? ORDER BY payment_date,id',(int(ins['id']),int(exclude_id or 0))).fetchall()
+    paid_principal=sum(float(r['principal'] or 0) for r in rows)
+    balance=max(0.0,float(ins['financed_amount'] or ins['amount'] or 0)-paid_principal)
+    rate=float(ins['rate_percent'] or 0) if ins['rate_mode']=='custom' else _rate_for_month(mortgage,payment_date[:7])
+    amount=float(amount or 0)
+    interest=float(interest or 0)
+    principal=float(principal or 0)
+    if amount<=0: return None
+    if interest<=0: interest=round(balance*rate/100/12,2)
+    if amount < interest: raise ValueError(f'ยอดจ่าย {amount:,.2f} ต่ำกว่าดอกเบี้ยงวดนี้ประมาณ {interest:,.2f}')
+    if principal<=0: principal=round(max(0.0,amount-interest),2)
+    principal=min(principal,balance)
+    if principal+0 > balance: principal=balance
+    return round(amount,2),round(principal,2),round(interest,2),round(rate,4),round(max(0,balance-principal),2)
+
 def add_house_insurance_payment(user_id, household_id, data):
     if not user_has_feature(user_id, household_id, 'loan'): return None
     iid=int(data.get('insurance_id') or 0)
+    payment_date=data.get('payment_date') or datetime.now(TZ).date().isoformat()
     with conn() as c:
         ins=c.execute('SELECT * FROM house_insurance WHERE id=? AND household_id=?',(iid,household_id)).fetchone()
-        if not ins or str(ins['payment_method'])!='ผ่อนแยก': return None
-        cur=c.execute('INSERT INTO house_insurance_payments(insurance_id,payment_date,amount,principal,interest,note) VALUES(?,?,?,?,?,?)',(iid,data.get('payment_date') or datetime.now(TZ).date().isoformat(),float(data.get('amount') or 0),float(data.get('principal') or 0),float(data.get('interest') or 0),data.get('note','')))
-        c.commit()
+    if not ins or str(ins['payment_method'])!='ผ่อนแยก': return None
+    mortgage=get_mortgage(household_id)
+    amount=float(data.get('amount') or ins['financed_monthly_payment'] or 0)
+    calc=_insurance_payment_calc(ins,mortgage,payment_date,amount,data.get('principal'),data.get('interest'))
+    if not calc: return None
+    amount,principal,interest,rate,balance=calc
+    with conn() as c:
+        cur=c.execute('INSERT INTO house_insurance_payments(insurance_id,payment_date,amount,principal,interest,note) VALUES(?,?,?,?,?,?)',(iid,payment_date,amount,principal,interest,data.get('note',''))); c.commit()
     return next((x for x in get_house_insurance(household_id) if x['id']==iid),None)
+
+def update_house_insurance_payment(user_id, household_id, data):
+    if not is_household_admin(user_id, household_id): return None
+    pid=int(data.get('id') or 0); iid=int(data.get('insurance_id') or 0)
+    with conn() as c: ins=c.execute('SELECT * FROM house_insurance WHERE id=? AND household_id=?',(iid,household_id)).fetchone()
+    if not ins: return None
+    payment_date=data.get('payment_date') or datetime.now(TZ).date().isoformat()
+    calc=_insurance_payment_calc(ins,get_mortgage(household_id),payment_date,data.get('amount'),data.get('principal'),data.get('interest'),pid)
+    if not calc: return None
+    amount,principal,interest,rate,balance=calc
+    with conn() as c:
+        c.execute('UPDATE house_insurance_payments SET payment_date=?,amount=?,principal=?,interest=?,note=? WHERE id=? AND insurance_id=?',(payment_date,amount,principal,interest,data.get('note',''),pid,iid)); c.commit()
+    return next((x for x in get_house_insurance(household_id) if x['id']==iid),None)
+
+def delete_house_insurance_payment(user_id, household_id, payment_id):
+    if not is_household_admin(user_id, household_id): return False
+    with conn() as c:
+        cur=c.execute('DELETE FROM house_insurance_payments WHERE id=? AND insurance_id IN (SELECT id FROM house_insurance WHERE household_id=?)',(int(payment_id),household_id)); c.commit(); return cur.rowcount>0
 
 def insurance_forecast(insurance, mortgage, months=120):
     if not insurance or str(insurance.get('payment_method'))!='ผ่อนแยก': return []

@@ -11,7 +11,7 @@ from database import (init_db, upsert_user, create_household, join_household, ge
                       get_categories, delete_transaction, set_display_name, get_household, get_settlement,
                       rename_household, delete_household, leave_household, is_household_admin,
                       get_member_permissions, set_member_features, set_member_role, user_has_feature, get_mortgage, is_super_admin, get_global_feature_permissions, set_global_feature, is_super_admin, get_global_feature_permissions, set_global_feature, global_user_has_feature, save_mortgage, add_mortgage_payment, mortgage_forecast, get_house_insurance,
-    insurance_forecast, add_house_insurance_payment, add_house_insurance, get_house_expenses, add_house_expense, get_installments, add_installment, add_installment_payment)
+    insurance_forecast, add_house_insurance_payment, add_house_insurance, get_house_expenses, add_house_expense, get_installments, add_installment, add_installment_payment, update_mortgage_payment, delete_mortgage_payment, update_house_insurance_payment, delete_house_insurance_payment)
 from ai import parse_text, parse_slip
 from split_utils import parse_split_instruction
 from flex import summary_flex, transaction_flex, recent_flex, settlement_flex, household_flex, help_text
@@ -302,6 +302,19 @@ async def api_loan_payment(request: Request):
     if row is None: raise HTTPException(status_code=400, detail='no mortgage or invalid payment')
     return row
 
+@app.put('/api/loan/payment')
+async def api_update_loan_payment(request: Request):
+    payload=await request.json(); user_id=str(payload.get('user_id') or '').strip(); hid=int(payload.get('household_id') or 0)
+    try: row=update_mortgage_payment(user_id,hid,payload)
+    except ValueError as e: raise HTTPException(status_code=400,detail=str(e))
+    if row is None: raise HTTPException(status_code=400,detail='update failed')
+    return row
+
+@app.delete('/api/loan/payment/{payment_id}')
+async def api_delete_loan_payment(payment_id:int, user_id:str, household_id:int):
+    if not delete_mortgage_payment(user_id,household_id,payment_id): raise HTTPException(status_code=403,detail='delete failed')
+    return {'ok':True}
+
 @app.post('/api/loan/insurance')
 async def api_loan_insurance(request: Request):
     payload=await request.json(); user_id=str(payload.get('user_id') or '').strip(); hid=int(payload.get('household_id') or 0)
@@ -317,6 +330,19 @@ async def api_loan_insurance_payment(request: Request):
     row=add_house_insurance_payment(user_id,hid,payload)
     if row is None: raise HTTPException(status_code=400, detail='insurance is not a separate installment plan')
     return row
+
+@app.put('/api/loan/insurance/payment')
+async def api_update_insurance_payment(request: Request):
+    payload=await request.json(); user_id=str(payload.get('user_id') or '').strip(); hid=int(payload.get('household_id') or 0)
+    try: row=update_house_insurance_payment(user_id,hid,payload)
+    except ValueError as e: raise HTTPException(status_code=400,detail=str(e))
+    if row is None: raise HTTPException(status_code=400,detail='update failed')
+    return row
+
+@app.delete('/api/loan/insurance/payment/{payment_id}')
+async def api_delete_insurance_payment(payment_id:int, user_id:str, household_id:int):
+    if not delete_house_insurance_payment(user_id,household_id,payment_id): raise HTTPException(status_code=403,detail='delete failed')
+    return {'ok':True}
 
 @app.post('/api/loan/expense')
 async def api_loan_expense(request: Request):
