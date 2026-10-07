@@ -1,24 +1,32 @@
-# MeeTang v8 — Command Manager + Safe Database Backup
+# MeeTang v10 — บ้าน & สินเชื่อ + รายการผ่อน
 
-## Important
-This version is designed to be non-destructive to the existing SQLite database. It does **not** delete or reset `moneymate.db` and uses `CREATE TABLE IF NOT EXISTS` migrations.
+เวอร์ชันนี้ต่อจาก v9 และเพิ่มโมดูลเต็มสำหรับคนที่ได้รับสิทธิ์จาก Admin:
 
-### Dashboard
-- 🤖 Command Manager: add/edit/enable/disable/delete bot commands without redeploying.
-- 💾 Database backup: `/api/backup/database` downloads a copy of the live SQLite DB.
-- 🔎 Backup status: `/api/backup/status` reports whether the configured DB file exists and its size.
+- 🏠 บ้าน & สินเชื่อ
+  - ข้อมูลราคาซื้อ / วงเงินกู้ / ค่างวด / ธนาคาร / ระยะเวลากู้
+  - ตารางดอกเบี้ยหลายช่วง รองรับ Fix และ MRR +/− Offset
+  - คำนวณเงินต้นและดอกเบี้ยประมาณการรายงวด
+  - กราฟแนวโน้มเงินต้นคงเหลือ
+  - บันทึกค่างวดจริงและเงินโปะ
+  - 🛡️ ประกันแยกจากสินเชื่อ เช่น MRTA / ประกันอัคคีภัย
+  - 🧾 ค่าใช้จ่ายบ้านแยกหมวด เช่น ค่าน้ำ ค่าไฟ อินเทอร์เน็ต ค่าส่วนกลาง ค่าซ่อม
+- 💳 รายการผ่อน
+  - เพิ่มสินค้า/บริการที่ผ่อน
+  - จำนวนงวด / ค่างวด / ยอดคงเหลือ
+  - บันทึกการจ่ายแต่ละงวด
+- 👑 สิทธิ์สมาชิกแบบ household-level จาก v9
+  - Owner/Admin เปิด/ปิด loan และ installment ให้สมาชิกแต่ละคน
+  - Backend ตรวจสิทธิ์ด้วย ไม่ใช่แค่ซ่อนเมนู
+- 🤖 Command Manager และ backup จาก v9 ยังคงอยู่
 
-### Default commands
-- ฝากเงิน / ฝาก → income
-- ถอนเงิน / ถอน → expense
-- เงินเดือน → income
-- สรุป → summary
-- รายการล่าสุด → recent
-- ลบรายการล่าสุด → delete latest
+## Deploy
+Start command:
+`uvicorn app:app --host 0.0.0.0 --port $PORT`
 
-## Critical Render warning
-If this service uses Render ephemeral filesystem, a redeploy/restart can remove local SQLite files. Do not assume the database survives deployment. Before a production migration, use the backup endpoint on the currently running version if it exists, or migrate the data to persistent external storage.
-
-## Required environment variables
+Environment:
 - LINE_CHANNEL_SECRET
-- LINE_CHANNEL_ACCESS_TOKEN (or LINE_ACCESS_TOKEN)
+- LINE_CHANNEL_ACCESS_TOKEN (หรือ LINE_ACCESS_TOKEN)
+- DATABASE_PATH (ถ้าต้องการกำหนด path เอง)
+
+## สำคัญ
+ก่อน Deploy ให้ดาวน์โหลด backup ฐานข้อมูลจาก Dashboard ในเมนูตั้งค่า Admin ก่อนเสมอ โดยเฉพาะถ้าใช้ SQLite บน Render Free ซึ่ง filesystem อาจไม่ถาวรเมื่อมี restart/redeploy.

@@ -9,7 +9,8 @@ from database import (init_db, upsert_user, create_household, join_household, ge
                       get_user_households, set_active_household, add_transaction, get_summary, get_recent,
                       get_commands, add_command, update_command, delete_command, find_command,
                       get_categories, delete_transaction, set_display_name, get_household, get_settlement,
-                      rename_household, delete_household, leave_household)
+                      rename_household, delete_household, leave_household, is_household_admin,
+                      get_member_permissions, set_member_features, set_member_role, user_has_feature, get_mortgage, save_mortgage, add_mortgage_payment, mortgage_forecast, get_house_insurance, add_house_insurance, get_house_expenses, add_house_expense, get_installments, add_installment, add_installment_payment)
 from ai import parse_text, parse_slip
 from split_utils import parse_split_instruction
 from flex import summary_flex, transaction_flex, recent_flex, settlement_flex, household_flex, help_text
@@ -196,11 +197,16 @@ def api_delete(tx_id: int, user_id: str | None = None, household_id: int | None 
     return {'deleted': delete_transaction(tx_id, user_id=user_id, household_id=household_id)}
 
 @app.get('/api/commands')
-def api_commands():
-    return {'commands': get_commands()}
+def api_commands(user_id: str, household_id: int | None = None):
+    hid = household_id or (get_active_household(user_id) or {}).get('id')
+    if not hid or not is_household_admin(user_id, int(hid)):
+        raise HTTPException(status_code=403, detail='admin only')
+    return {'commands': get_commands(), 'is_admin': True}
 
 @app.post('/api/commands')
 def api_add_command(payload: dict):
+    user_id = str(payload.get('user_id') or '').strip(); hid = int(payload.get('household_id') or 0)
+    if not user_id or not hid or not is_household_admin(user_id, hid): raise HTTPException(status_code=403, detail='admin only')
     try:
         return add_command(payload.get('name',''), payload.get('aliases',''), payload.get('action','custom'), payload.get('description',''), bool(payload.get('enabled',True)))
     except Exception as e:
@@ -208,13 +214,102 @@ def api_add_command(payload: dict):
 
 @app.put('/api/commands/{command_id}')
 def api_update_command(command_id: int, payload: dict):
+    user_id = str(payload.get('user_id') or '').strip(); hid = int(payload.get('household_id') or 0)
+    if not user_id or not hid or not is_household_admin(user_id, hid): raise HTTPException(status_code=403, detail='admin only')
     row=update_command(command_id, payload.get('name',''), payload.get('aliases',''), payload.get('action','custom'), payload.get('description',''), bool(payload.get('enabled',True)))
     if not row: raise HTTPException(status_code=404, detail='command not found')
     return row
 
 @app.delete('/api/commands/{command_id}')
-def api_delete_command(command_id: int):
+def api_delete_command(command_id: int, user_id: str, household_id: int):
+    if not is_household_admin(user_id, household_id): raise HTTPException(status_code=403, detail='admin only')
     return {'ok': delete_command(command_id)}
+
+@app.get('/api/installments')
+def api_installments(user_id: str, household_id: int):
+    if not user_has_feature(user_id, household_id, 'installment'):
+        raise HTTPException(status_code=403, detail='installment feature disabled')
+    return {'plans': get_installments(household_id)}
+
+@app.post('/api/installments')
+async def api_add_installment(request: Request):
+    payload=await request.json(); user_id=str(payload.get('user_id') or '').strip(); hid=int(payload.get('household_id') or 0)
+    if not user_id or not hid or not is_household_admin(user_id,hid): raise HTTPException(status_code=403, detail='admin only')
+    row=add_installment(user_id,hid,payload)
+    if row is None: raise HTTPException(status_code=400, detail='save failed')
+    return {'plans':row}
+
+@app.post('/api/installments/payment')
+async def api_add_installment_payment(request: Request):
+    payload=await request.json(); user_id=str(payload.get('user_id') or '').strip(); hid=int(payload.get('household_id') or 0)
+    if not user_id or not hid or not user_has_feature(user_id,hid,'installment'): raise HTTPException(status_code=403, detail='installment feature disabled')
+    row=add_installment_payment(user_id,hid,payload)
+    if row is None: raise HTTPException(status_code=400, detail='save failed')
+    return {'plans':row}
+
+@app.get('/api/loan')
+def api_loan(user_id: str, household_id: int):
+    if not user_has_feature(user_id, household_id, 'loan'):
+        raise HTTPException(status_code=403, detail='loan feature disabled')
+    m=get_mortgage(household_id)
+    ins=get_house_insurance(household_id)
+    exp=get_house_expenses(household_id)
+    forecast=mortgage_forecast(m, int((m or {}).get('term_years') or 30)*12) if m else []
+    paid_principal=sum(float(x.get('principal') or 0) + float(x.get('extra_principal') or 0) for x in (m or {}).get('payments',[]))
+    paid_interest=sum(float(x.get('interest') or 0) for x in (m or {}).get('payments',[]))
+    actual_balance=max(0, float((m or {}).get('loan_amount') or 0)-paid_principal)
+    return {'mortgage':m,'forecast':forecast,'insurance':ins,'expenses':exp,'paid_principal':round(paid_principal,2),'paid_interest':round(paid_interest,2),'actual_balance':round(actual_balance,2)}
+
+@app.put('/api/loan')
+async def api_save_loan(request: Request):
+    payload=await request.json(); user_id=str(payload.get('user_id') or '').strip(); hid=int(payload.get('household_id') or 0)
+    if not user_id or not hid or not is_household_admin(user_id,hid): raise HTTPException(status_code=403, detail='admin only')
+    row=save_mortgage(user_id,hid,payload)
+    if row is None: raise HTTPException(status_code=400, detail='save failed')
+    return row
+
+@app.post('/api/loan/payment')
+async def api_loan_payment(request: Request):
+    payload=await request.json(); user_id=str(payload.get('user_id') or '').strip(); hid=int(payload.get('household_id') or 0)
+    if not user_id or not hid or not user_has_feature(user_id,hid,'loan'): raise HTTPException(status_code=403, detail='loan feature disabled')
+    row=add_mortgage_payment(user_id,hid,payload)
+    if row is None: raise HTTPException(status_code=400, detail='no mortgage')
+    return row
+
+@app.post('/api/loan/insurance')
+async def api_loan_insurance(request: Request):
+    payload=await request.json(); user_id=str(payload.get('user_id') or '').strip(); hid=int(payload.get('household_id') or 0)
+    if not user_id or not hid or not is_household_admin(user_id,hid): raise HTTPException(status_code=403, detail='admin only')
+    row=add_house_insurance(user_id,hid,payload)
+    if row is None: raise HTTPException(status_code=400, detail='save failed')
+    return row
+
+@app.post('/api/loan/expense')
+async def api_loan_expense(request: Request):
+    payload=await request.json(); user_id=str(payload.get('user_id') or '').strip(); hid=int(payload.get('household_id') or 0)
+    if not user_id or not hid or not user_has_feature(user_id,hid,'loan'): raise HTTPException(status_code=403, detail='loan feature disabled')
+    row=add_house_expense(user_id,hid,payload)
+    if row is None: raise HTTPException(status_code=400, detail='save failed')
+    return row
+
+@app.get('/api/permissions')
+def api_permissions(user_id: str, household_id: int):
+    data = get_member_permissions(user_id, household_id)
+    if data is None: raise HTTPException(status_code=403, detail='not a household member')
+    return data
+
+@app.put('/api/permissions/member/{member_user_id}')
+async def api_set_member_permissions(member_user_id: str, request: Request):
+    payload = await request.json()
+    requester = str(payload.get('user_id') or '').strip(); hid = int(payload.get('household_id') or 0)
+    if not requester or not hid or not is_household_admin(requester, hid): raise HTTPException(status_code=403, detail='admin only')
+    features = payload.get('features') or {}
+    role = payload.get('role')
+    if role is not None and not set_member_role(requester, hid, member_user_id, role):
+        raise HTTPException(status_code=400, detail='cannot change this member role')
+    if not set_member_features(requester, hid, member_user_id, features):
+        raise HTTPException(status_code=400, detail='member not found')
+    return get_member_permissions(requester, hid)
 
 @app.post('/webhook')
 async def webhook(request: Request):
