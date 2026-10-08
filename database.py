@@ -358,7 +358,7 @@ def set_global_feature(requester_user_id, member_user_id, feature, enabled):
         now = datetime.now(TZ).isoformat(timespec='seconds')
         c.execute("""INSERT INTO global_feature_permissions(user_id,feature,enabled,updated_at) VALUES(?,?,?,?)
                      ON CONFLICT(user_id,feature) DO UPDATE SET enabled=excluded.enabled, updated_at=excluded.updated_at""",
-                  (member_user_id, feature, 1 if enabled else 0, now))
+                  (member_user_id, feature, bool(enabled), now))
         c.commit()
     return True
 
@@ -410,7 +410,7 @@ def set_member_features(requester_user_id, household_id, member_user_id, feature
         if not member: return False
         now = datetime.now(TZ).isoformat(timespec='seconds')
         for feature in FEATURES:
-            enabled = 1 if bool((features or {}).get(feature, False)) else 0
+            enabled = bool((features or {}).get(feature, False))
             sql = '''INSERT INTO household_feature_permissions(household_id,user_id,feature,enabled,updated_at) VALUES(?,?,?,?,?)
                      ON CONFLICT(household_id,user_id,feature) DO UPDATE SET enabled=excluded.enabled, updated_at=excluded.updated_at'''
             c.execute(sql, (household_id, member_user_id, feature, enabled, now))

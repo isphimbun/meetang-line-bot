@@ -57,3 +57,15 @@ Set `SUPER_ADMIN_USER_ID` to the one LINE User ID that owns the MeeTang system. 
 ## v26.1 Rich Menu
 - Bottom-right Rich Menu panel visibly says Dashboard.
 - The panel action opens DASHBOARD_URL (default https://meetang-bot.onrender.com).
+
+## v27
+- Fix PostgreSQL boolean permissions: write TRUE/FALSE instead of 1/0.
+
+## Rich Menu Dashboard
+- Bottom-right Rich Menu button opens DASHBOARD_URL.
+- Default: https://meetang-bot.onrender.com
+
+## v28 Rich Menu
+- 6 main buttons: เพิ่มรายการ, รายการล่าสุด, สรุปเงิน, บ้านของฉัน, เคลียร์ยอด, Dashboard
+- Removed ตั้งค่า from the main Rich Menu.
+- Dashboard opens DASHBOARD_URL (default: https://meetang-bot.onrender.com).
