@@ -312,7 +312,7 @@ def get_summary(month=None, user_id=None, household_id=None):
     where = f'substr(occurred_at,1,7)=? AND {scope}'; qparams = [month] + params
     with conn() as c:
         total = c.execute(f'SELECT type,COALESCE(SUM(amount),0) total FROM transactions WHERE {where} GROUP BY type', qparams).fetchall()
-        cats = c.execute(f"SELECT category,type,COALESCE(SUM(amount),0) total,COUNT(*) count FROM transactions WHERE {where} AND type='expense' GROUP BY category ORDER BY total DESC", qparams).fetchall()
+        cats = c.execute(f"SELECT category,type,COALESCE(SUM(amount),0) total,COUNT(*) count FROM transactions WHERE {where} AND type='expense' GROUP BY category,type ORDER BY total DESC", qparams).fetchall()
         count = c.execute(f'SELECT COUNT(*) FROM transactions WHERE {where}', qparams).fetchone()[0]
     income = next((r['total'] for r in total if r['type']=='income'), 0); expense = next((r['total'] for r in total if r['type']=='expense'), 0)
     return {'month':month,'income':income,'expense':expense,'balance':income-expense,'count':count,'categories':[dict(r) for r in cats]}

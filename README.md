@@ -50,3 +50,10 @@ Set `SUPER_ADMIN_USER_ID` to the one LINE User ID that owns the MeeTang system. 
 - Rich Menu bottom-right button opens DASHBOARD_URL (default: https://meetang-bot.onrender.com)
 - Split expenses support ratio syntax such as `หาร 60:40`, `60/40`, and named percentages.
 - Added examples to LINE help.
+
+## v26 fix
+- Fixed PostgreSQL summary query: category + type are both included in GROUP BY.
+
+## v26.1 Rich Menu
+- Bottom-right Rich Menu panel visibly says Dashboard.
+- The panel action opens DASHBOARD_URL (default https://meetang-bot.onrender.com).
