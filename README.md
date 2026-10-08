@@ -69,3 +69,8 @@ Set `SUPER_ADMIN_USER_ID` to the one LINE User ID that owns the MeeTang system. 
 Top: เพิ่มรายการ | รายการล่าสุด | สรุปเงิน
 Bottom: บ้านของฉัน | เคลียร์ยอด | Dashboard
 Dashboard opens DASHBOARD_URL (default: https://meetang-bot.onrender.com).
+
+## v29 Rich Menu Fix
+- The app no longer reuses the old v5 Rich Menu.
+- Every deployment creates a fresh v29 menu, uploads the approved pastel bunny artwork, and sets it as the default for all users.
+- Bottom-right Dashboard opens DASHBOARD_URL (default https://meetang-bot.onrender.com).
