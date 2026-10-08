@@ -326,6 +326,12 @@ def get_recent(limit=20, user_id=None, household_id=None):
 
 
 
+def get_all_user_ids():
+    with conn() as c:
+        rows = c.execute('SELECT user_id FROM users WHERE user_id IS NOT NULL AND user_id <> ''').fetchall()
+    return [r['user_id'] for r in rows]
+
+
 FEATURES = {
     'loan': '🏠 บ้าน & สินเชื่อ',
     'installment': '💳 รายการผ่อน',

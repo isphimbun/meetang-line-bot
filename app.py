@@ -10,7 +10,7 @@ from database import (init_db, upsert_user, create_household, join_household, ge
                       get_commands, add_command, update_command, delete_command, find_command,
                       get_categories, delete_transaction, set_display_name, get_household, get_settlement,
                       rename_household, delete_household, leave_household, is_household_admin,
-                      get_member_permissions, set_member_features, set_member_role, user_has_feature, get_mortgage, is_super_admin, get_global_feature_permissions, set_global_feature, is_super_admin, get_global_feature_permissions, set_global_feature, global_user_has_feature, save_mortgage, add_mortgage_payment, mortgage_forecast, get_house_insurance,
+                      get_member_permissions, set_member_features, set_member_role, user_has_feature, get_all_user_ids, get_mortgage, is_super_admin, get_global_feature_permissions, set_global_feature, is_super_admin, get_global_feature_permissions, set_global_feature, global_user_has_feature, save_mortgage, add_mortgage_payment, mortgage_forecast, get_house_insurance,
     insurance_forecast, add_house_insurance_payment, add_house_insurance, get_house_expenses, add_house_expense, get_installments, add_installment, add_installment_payment, update_mortgage_payment, delete_mortgage_payment, update_house_insurance_payment, delete_house_insurance_payment)
 from ai import parse_text, parse_slip
 from split_utils import parse_split_instruction
@@ -76,7 +76,8 @@ def setup_rich_menu_on_startup():
             )
         r.raise_for_status()
 
-        # Make this new menu the default for all users.
+        # Make this new menu the default AND explicitly link it to every known user.
+        # Existing users may have an older user-specific Rich Menu, which overrides the default.
         r = requests.post(
             f'https://api.line.me/v2/bot/user/all/richmenu/{menu_id}',
             headers=headers,
@@ -84,7 +85,22 @@ def setup_rich_menu_on_startup():
         )
         r.raise_for_status()
 
-        print('Rich Menu v29 activated:', menu_id)
+        linked = 0
+        for uid in get_all_user_ids():
+            try:
+                rr = requests.post(
+                    f'https://api.line.me/v2/bot/user/{uid}/richmenu/{menu_id}',
+                    headers=headers,
+                    timeout=15
+                )
+                if rr.ok:
+                    linked += 1
+                else:
+                    print('Rich Menu user link failed:', uid, rr.status_code, rr.text[:300])
+            except Exception as user_err:
+                print('Rich Menu user link error:', uid, repr(user_err))
+
+        print('Rich Menu v30 activated:', menu_id, 'linked_users:', linked)
     except Exception as e:
         print('Rich Menu setup error:', repr(e))
 

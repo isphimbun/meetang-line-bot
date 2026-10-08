@@ -9,7 +9,7 @@ headers={'Authorization':f'Bearer {TOKEN}'}
 menu={
   'size': {'width':2500,'height':1686},
   'selected': True,
-  'name': 'MeeTang Main Menu v29 Dashboard',
+  'name': 'MeeTang Main Menu v30 Dashboard',
   'chatBarText': '💰 มีตังค์',
   'areas': [
     {'bounds':{'x':0,'y':0,'width':833,'height':843},'action':{'type':'message','text':'เพิ่มรายการ'}},

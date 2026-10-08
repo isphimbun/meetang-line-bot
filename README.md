@@ -74,3 +74,6 @@ Dashboard opens DASHBOARD_URL (default: https://meetang-bot.onrender.com).
 - The app no longer reuses the old v5 Rich Menu.
 - Every deployment creates a fresh v29 menu, uploads the approved pastel bunny artwork, and sets it as the default for all users.
 - Bottom-right Dashboard opens DASHBOARD_URL (default https://meetang-bot.onrender.com).
+
+## v30 Rich Menu Fix
+- Explicitly links the new Rich Menu to every user in the database so old user-specific menus are replaced.
