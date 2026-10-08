@@ -296,10 +296,25 @@ def api_loan(user_id: str, household_id: int):
 
 @app.put('/api/loan')
 async def api_save_loan(request: Request):
-    payload=await request.json(); user_id=str(payload.get('user_id') or '').strip(); hid=int(payload.get('household_id') or 0)
-    if not user_id or not hid or not is_household_admin(user_id,hid): raise HTTPException(status_code=403, detail='admin only')
-    row=save_mortgage(user_id,hid,payload)
-    if row is None: raise HTTPException(status_code=400, detail='save failed')
+    payload=await request.json()
+    user_id=str(payload.get('user_id') or '').strip()
+    try:
+        hid=int(payload.get('household_id') or 0)
+    except Exception:
+        hid=0
+    if not user_id or not hid:
+        raise HTTPException(status_code=400, detail='ข้อมูลผู้ใช้หรือบ้านไม่ครบ')
+    if not is_household_admin(user_id,hid):
+        raise HTTPException(status_code=403, detail='บัญชีนี้ไม่มีสิทธิ์บันทึกสินเชื่อของบ้านนี้')
+    try:
+        row=save_mortgage(user_id,hid,payload)
+    except Exception as e:
+        import traceback
+        print('SAVE LOAN ERROR:', repr(e))
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f'บันทึกสินเชื่อไม่สำเร็จ: {type(e).__name__}: {e}')
+    if row is None:
+        raise HTTPException(status_code=400, detail='บันทึกไม่สำเร็จ: ยังไม่ได้เปิดสิทธิ์ บ้าน & สินเชื่อ สำหรับบัญชีนี้')
     return row
 
 @app.post('/api/loan/payment')
