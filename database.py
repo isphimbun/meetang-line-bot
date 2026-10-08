@@ -1,4 +1,7 @@
-import os, sqlite3, secrets, json
+import os, secrets, json, re
+import psycopg2
+from psycopg2 import IntegrityError
+from psycopg2.extras import DictCursor
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -17,118 +20,137 @@ DEFAULT_COMMANDS = [
 ]
 
 
+class PGCursor:
+    """Small compatibility layer so MeeTang's existing DB code can use PostgreSQL."""
+    ID_TABLES = {
+        'households', 'transactions', 'bot_commands', 'mortgages', 'mortgage_rates',
+        'mortgage_payments', 'house_insurance', 'house_insurance_payments',
+        'house_expenses', 'installment_plans', 'installment_payments'
+    }
+
+    def __init__(self, cursor):
+        self._cur = cursor
+        self._lastrowid = None
+
+    @property
+    def lastrowid(self):
+        return self._lastrowid
+
+    @property
+    def rowcount(self):
+        return self._cur.rowcount
+
+    def fetchone(self):
+        return self._cur.fetchone()
+
+    def fetchall(self):
+        return self._cur.fetchall()
+
+    def execute(self, sql, params=None):
+        sql = sql.replace('?', '%s')
+        stripped = sql.lstrip()
+
+        # SQLite compatibility for the few INSERT OR variants used by MeeTang.
+        sql = re.sub(
+            r'^INSERT\s+OR\s+IGNORE\s+INTO\s+household_members',
+            'INSERT INTO household_members', sql, flags=re.I
+        )
+        if re.search(r'^INSERT\s+OR\s+REPLACE\s+INTO\s+user_active_household', sql, flags=re.I):
+            sql = re.sub(
+                r'^INSERT\s+OR\s+REPLACE\s+INTO\s+user_active_household',
+                'INSERT INTO user_active_household', sql, flags=re.I
+            )
+            sql += ' ON CONFLICT (user_id) DO UPDATE SET household_id=EXCLUDED.household_id'
+        elif 'INSERT INTO household_members' in sql and 'ON CONFLICT' not in sql.upper():
+            sql += ' ON CONFLICT DO NOTHING'
+
+        # PostgreSQL needs RETURNING id instead of SQLite's cursor.lastrowid.
+        if re.match(r'^INSERT\s+INTO\s+([a-z_]+)', sql, flags=re.I):
+            table_match = re.match(r'^INSERT\s+INTO\s+([a-z_]+)', sql, flags=re.I)
+            table = table_match.group(1).lower() if table_match else ''
+            if table in self.ID_TABLES and 'RETURNING' not in sql.upper():
+                sql += ' RETURNING id'
+
+        try:
+            self._cur.execute(sql, params)
+        except IntegrityError:
+            # psycopg2 marks the whole transaction failed after a constraint error.
+            # Roll back here so existing SQLite-style retry logic can continue.
+            self._cur.connection.rollback()
+            raise
+        self._lastrowid = None
+        if re.match(r'^INSERT\s+INTO\s+([a-z_]+)', sql, flags=re.I) and 'RETURNING id' in sql.upper():
+            row = self._cur.fetchone()
+            if row:
+                self._lastrowid = row['id'] if isinstance(row, dict) else row[0]
+        return self
+
+    def __getattr__(self, name):
+        return getattr(self._cur, name)
+
+
+class PGConnection:
+    def __init__(self, raw):
+        self._raw = raw
+
+    def execute(self, sql, params=None):
+        cur = PGCursor(self._raw.cursor())
+        cur.execute(sql, params)
+        return cur
+
+    def cursor(self):
+        return self._raw.cursor()
+
+    def commit(self):
+        return self._raw.commit()
+
+    def rollback(self):
+        return self._raw.rollback()
+
+    def close(self):
+        return self._raw.close()
+
+    def __enter__(self):
+        self._raw.__enter__()
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        try:
+            if exc_type:
+                self._raw.rollback()
+            else:
+                self._raw.commit()
+        finally:
+            self._raw.close()
+
+
 def conn():
-    c = sqlite3.connect(DB_PATH)
-    c.row_factory = sqlite3.Row
-    return c
+    database_url = os.getenv('DATABASE_URL', '').strip()
+    if not database_url:
+        raise RuntimeError('DATABASE_URL is not configured. Add your Supabase PostgreSQL connection string to Render Environment Variables.')
+    raw = psycopg2.connect(database_url, cursor_factory=DictCursor, connect_timeout=15, sslmode='require')
+    return PGConnection(raw)
 
 
 def init_db():
+    """Supabase schema is created by migration SQL; only seed defaults and sync identity sequences here."""
     with conn() as c:
-        c.execute('''CREATE TABLE IF NOT EXISTS users (
-            user_id TEXT PRIMARY KEY, display_name TEXT DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL)''')
-        c.execute('''CREATE TABLE IF NOT EXISTS households (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, invite_code TEXT UNIQUE NOT NULL,
-            owner_user_id TEXT NOT NULL, created_at TEXT NOT NULL)''')
-        c.execute('''CREATE TABLE IF NOT EXISTS household_members (
-            household_id INTEGER NOT NULL, user_id TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'member',
-            joined_at TEXT NOT NULL, PRIMARY KEY (household_id, user_id))''')
-        c.execute('''CREATE TABLE IF NOT EXISTS user_active_household (
-            user_id TEXT PRIMARY KEY, household_id INTEGER NOT NULL)''')
-        c.execute('''CREATE TABLE IF NOT EXISTS transactions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, household_id INTEGER,
-            type TEXT NOT NULL CHECK(type IN ('income','expense')), amount REAL NOT NULL, category TEXT NOT NULL,
-            merchant TEXT, note TEXT, occurred_at TEXT NOT NULL, source TEXT, original_text TEXT, created_at TEXT NOT NULL,
-            payer_user_id TEXT, split_mode TEXT DEFAULT 'self', split_participants TEXT DEFAULT '[]', split_amounts TEXT DEFAULT '{}')''')
-        cols = {r['name'] for r in c.execute('PRAGMA table_info(transactions)').fetchall()}
-        migrations = {
-            'household_id': 'ALTER TABLE transactions ADD COLUMN household_id INTEGER',
-            'payer_user_id': 'ALTER TABLE transactions ADD COLUMN payer_user_id TEXT',
-            'split_mode': "ALTER TABLE transactions ADD COLUMN split_mode TEXT DEFAULT 'self'",
-            'split_participants': "ALTER TABLE transactions ADD COLUMN split_participants TEXT DEFAULT '[]'",
-            'split_amounts': "ALTER TABLE transactions ADD COLUMN split_amounts TEXT DEFAULT '{}'",
-        }
-        for col, sql in migrations.items():
-            if col not in cols: c.execute(sql)
-        c.execute('CREATE INDEX IF NOT EXISTS idx_tx_user_date ON transactions(user_id, occurred_at)')
-        c.execute('CREATE INDEX IF NOT EXISTS idx_tx_house_date ON transactions(household_id, occurred_at)')
-        c.execute('''CREATE TABLE IF NOT EXISTS bot_commands (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            aliases TEXT NOT NULL,
-            action TEXT NOT NULL,
-            description TEXT DEFAULT '',
-            enabled INTEGER NOT NULL DEFAULT 1,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-        )''')
-        c.execute('''CREATE TABLE IF NOT EXISTS household_feature_permissions (
-            household_id INTEGER NOT NULL, user_id TEXT NOT NULL, feature TEXT NOT NULL,
-            enabled INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL,
-            PRIMARY KEY (household_id, user_id, feature)
-        )''')
-        c.execute('CREATE INDEX IF NOT EXISTS idx_feature_perm_house ON household_feature_permissions(household_id, user_id)')
-        c.execute("""CREATE TABLE IF NOT EXISTS global_feature_permissions (
-            user_id TEXT NOT NULL, feature TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL,
-            PRIMARY KEY (user_id, feature)
-        )""")
-        c.execute('CREATE INDEX IF NOT EXISTS idx_global_feature_user ON global_feature_permissions(user_id)')
-        c.execute('''CREATE TABLE IF NOT EXISTS mortgages (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, household_id INTEGER UNIQUE NOT NULL, property_name TEXT DEFAULT '',
-            purchase_price REAL DEFAULT 0, loan_amount REAL DEFAULT 0, start_date TEXT, term_years INTEGER DEFAULT 30,
-            monthly_payment REAL DEFAULT 0, bank TEXT DEFAULT '', contract_no TEXT DEFAULT '', payment_day INTEGER DEFAULT 31,
-            current_mrr REAL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)''')
-        c.execute('''CREATE TABLE IF NOT EXISTS mortgage_rates (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, mortgage_id INTEGER NOT NULL, start_date TEXT, end_date TEXT,
-            rate_percent REAL DEFAULT 0, rate_type TEXT DEFAULT 'fixed', mrr_offset REAL, label TEXT DEFAULT '')''')
-        c.execute('''CREATE TABLE IF NOT EXISTS mortgage_payments (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, mortgage_id INTEGER NOT NULL, payment_date TEXT NOT NULL,
-            amount REAL NOT NULL, principal REAL DEFAULT 0, interest REAL DEFAULT 0, extra_principal REAL DEFAULT 0, note TEXT DEFAULT '')''')
-        c.execute('''CREATE TABLE IF NOT EXISTS house_insurance (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, household_id INTEGER NOT NULL, insurance_type TEXT NOT NULL,
-            provider TEXT DEFAULT '', amount REAL NOT NULL, payment_cycle TEXT DEFAULT 'รายปี', due_date TEXT, status TEXT DEFAULT 'ยังไม่จ่าย', note TEXT DEFAULT '',
-            payment_method TEXT DEFAULT 'จ่ายครั้งเดียว', financed_amount REAL DEFAULT 0, financed_installments INTEGER DEFAULT 0,
-            financed_monthly_payment REAL DEFAULT 0, financed_start_date TEXT, financed_payment_day INTEGER DEFAULT 31,
-            rate_mode TEXT DEFAULT 'same_as_mortgage', rate_percent REAL DEFAULT 0)''')
-        ins_cols={r['name'] for r in c.execute('PRAGMA table_info(house_insurance)').fetchall()}
-        ins_migrations={
-            'payment_method': "ALTER TABLE house_insurance ADD COLUMN payment_method TEXT DEFAULT 'จ่ายครั้งเดียว'",
-            'financed_amount': 'ALTER TABLE house_insurance ADD COLUMN financed_amount REAL DEFAULT 0',
-            'financed_installments': 'ALTER TABLE house_insurance ADD COLUMN financed_installments INTEGER DEFAULT 0',
-            'financed_monthly_payment': 'ALTER TABLE house_insurance ADD COLUMN financed_monthly_payment REAL DEFAULT 0',
-            'financed_start_date': 'ALTER TABLE house_insurance ADD COLUMN financed_start_date TEXT',
-            'financed_payment_day': 'ALTER TABLE house_insurance ADD COLUMN financed_payment_day INTEGER DEFAULT 31',
-            'rate_mode': "ALTER TABLE house_insurance ADD COLUMN rate_mode TEXT DEFAULT 'same_as_mortgage'",
-            'rate_percent': 'ALTER TABLE house_insurance ADD COLUMN rate_percent REAL DEFAULT 0',
-        }
-        for col,sql in ins_migrations.items():
-            if col not in ins_cols: c.execute(sql)
-        c.execute('''CREATE TABLE IF NOT EXISTS house_insurance_payments (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, insurance_id INTEGER NOT NULL, payment_date TEXT NOT NULL,
-            amount REAL NOT NULL, principal REAL DEFAULT 0, interest REAL DEFAULT 0, note TEXT DEFAULT '')''')
-        c.execute('CREATE INDEX IF NOT EXISTS idx_insurance_payment ON house_insurance_payments(insurance_id,payment_date)')
-        c.execute('''CREATE TABLE IF NOT EXISTS house_expenses (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, household_id INTEGER NOT NULL, expense_date TEXT NOT NULL,
-            expense_type TEXT NOT NULL, description TEXT DEFAULT '', amount REAL NOT NULL, note TEXT DEFAULT '')''')
-        c.execute('CREATE INDEX IF NOT EXISTS idx_mortgage_house ON mortgages(household_id)')
-        c.execute('CREATE INDEX IF NOT EXISTS idx_insurance_house ON house_insurance(household_id)')
-        c.execute('CREATE INDEX IF NOT EXISTS idx_expenses_house_date ON house_expenses(household_id, expense_date)')
-        c.execute('''CREATE TABLE IF NOT EXISTS installment_plans (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, household_id INTEGER NOT NULL, name TEXT NOT NULL, category TEXT DEFAULT '',
-            total_price REAL DEFAULT 0, down_payment REAL DEFAULT 0, financed_amount REAL DEFAULT 0, total_installments INTEGER DEFAULT 0,
-            monthly_payment REAL DEFAULT 0, start_date TEXT, interest_rate REAL DEFAULT 0, provider TEXT DEFAULT '', due_day INTEGER DEFAULT 1,
-            status TEXT DEFAULT 'กำลังผ่อน', created_at TEXT NOT NULL)''')
-        c.execute('''CREATE TABLE IF NOT EXISTS installment_payments (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, plan_id INTEGER NOT NULL, payment_date TEXT NOT NULL, amount REAL NOT NULL,
-            principal REAL DEFAULT 0, interest REAL DEFAULT 0, note TEXT DEFAULT '')''')
-        c.execute('CREATE INDEX IF NOT EXISTS idx_installment_house ON installment_plans(household_id)')
         count = c.execute('SELECT COUNT(*) FROM bot_commands').fetchone()[0]
         if count == 0:
             now = datetime.now(TZ).isoformat(timespec='seconds')
             for name, aliases, action, description in DEFAULT_COMMANDS:
-                c.execute('INSERT INTO bot_commands(name,aliases,action,description,enabled,created_at,updated_at) VALUES(?,?,?,?,?,?,?)',
-                          (name, aliases, action, description, 1, now, now))
-        c.commit()
+                c.execute(
+                    'INSERT INTO bot_commands(name,aliases,action,description,enabled,created_at,updated_at) VALUES(?,?,?,?,?,?,?)',
+                    (name, aliases, action, description, True, now, now)
+                )
+
+        # Keep PostgreSQL identity sequences ahead of manually imported IDs.
+        for table in ['households','transactions','bot_commands','mortgages','mortgage_rates',
+                      'mortgage_payments','house_insurance','house_insurance_payments',
+                      'house_expenses','installment_plans','installment_payments']:
+            c.execute(
+                f"SELECT setval(pg_get_serial_sequence('{table}','id'), COALESCE(MAX(id),1), MAX(id) IS NOT NULL) FROM {table}"
+            )
 
 
 def upsert_user(user_id, display_name=''):
@@ -157,7 +179,7 @@ def create_household(owner_user_id, name='บ้านของเรา'):
                 c.execute('INSERT INTO household_members(household_id,user_id,role,joined_at) VALUES(?,?,?,?)', (hid, owner_user_id, 'owner', now))
                 c.execute('INSERT OR REPLACE INTO user_active_household(user_id,household_id) VALUES(?,?)', (owner_user_id, hid))
                 c.commit(); return get_household(hid)
-            except sqlite3.IntegrityError: continue
+            except IntegrityError: continue
     raise RuntimeError('could not create household')
 
 

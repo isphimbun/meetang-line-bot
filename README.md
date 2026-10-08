@@ -44,3 +44,9 @@ Set `SUPER_ADMIN_USER_ID` to the one LINE User ID that owns the MeeTang system. 
 - มีตารางผ่อน/บันทึกงวดประกันแยก
 - ป้องกันค่างวดบ้านต่ำกว่าดอกเบี้ยเดือนแรก
 - เว้นค่างวดบ้านว่างได้เพื่อให้ระบบประมาณการจากดอกเบี้ยแรกและระยะเวลา
+
+
+## v25 changes
+- Rich Menu bottom-right button opens DASHBOARD_URL (default: https://meetang-bot.onrender.com)
+- Split expenses support ratio syntax such as `หาร 60:40`, `60/40`, and named percentages.
+- Added examples to LINE help.

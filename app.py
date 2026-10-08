@@ -117,23 +117,12 @@ def root(): return FileResponse('static/index.html')
 
 @app.get('/api/backup/database')
 def backup_database():
-    # Non-destructive: copies the existing SQLite file; never deletes or replaces the live DB.
-    db_path = os.getenv('DATABASE_PATH', 'moneymate.db')
-    if not os.path.exists(db_path):
-        raise HTTPException(status_code=404, detail='database file not found')
-    backup_dir = os.path.join('/tmp', 'meetang_backups')
-    os.makedirs(backup_dir, exist_ok=True)
-    stamp = datetime.now(TZ).strftime('%Y%m%d_%H%M%S')
-    out = os.path.join(backup_dir, f'meetang_backup_{stamp}.db')
-    shutil.copy2(db_path, out)
-    return FileResponse(out, filename=os.path.basename(out), media_type='application/octet-stream')
+    # MeeTang now uses Supabase PostgreSQL; the old SQLite-file backup endpoint is intentionally disabled.
+    raise HTTPException(status_code=410, detail='MeeTang database is now stored in Supabase PostgreSQL')
 
 @app.get('/api/backup/status')
 def backup_status():
-    db_path = os.getenv('DATABASE_PATH', 'moneymate.db')
-    exists = os.path.exists(db_path)
-    size = os.path.getsize(db_path) if exists else 0
-    return {'ok': True, 'database_exists': exists, 'database_path': os.path.basename(db_path), 'size_bytes': size}
+    return {'ok': True, 'database': 'supabase_postgresql', 'database_configured': bool(os.getenv('DATABASE_URL'))}
 
 @app.get('/health')
 def health(): return {'ok': True, 'service': 'moneymate-line-bot', 'multi_user': True, 'shared_household': True}
