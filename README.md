@@ -65,7 +65,7 @@ Set `SUPER_ADMIN_USER_ID` to the one LINE User ID that owns the MeeTang system. 
 - Bottom-right Rich Menu button opens DASHBOARD_URL.
 - Default: https://meetang-bot.onrender.com
 
-## v28 Rich Menu
-- 6 main buttons: เพิ่มรายการ, รายการล่าสุด, สรุปเงิน, บ้านของฉัน, เคลียร์ยอด, Dashboard
-- Removed ตั้งค่า from the main Rich Menu.
-- Dashboard opens DASHBOARD_URL (default: https://meetang-bot.onrender.com).
+## Final Rich Menu
+Top: เพิ่มรายการ | รายการล่าสุด | สรุปเงิน
+Bottom: บ้านของฉัน | เคลียร์ยอด | Dashboard
+Dashboard opens DASHBOARD_URL (default: https://meetang-bot.onrender.com).

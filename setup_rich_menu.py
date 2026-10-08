@@ -9,12 +9,12 @@ headers={'Authorization':f'Bearer {TOKEN}'}
 menu={
   'size': {'width':2500,'height':1686},
   'selected': True,
-  'name': 'MeeTang Main Menu v6 Dashboard',
+  'name': 'MeeTang Main Menu v7 Dashboard',
   'chatBarText': '💰 มีตังค์',
   'areas': [
     {'bounds':{'x':0,'y':0,'width':833,'height':843},'action':{'type':'message','text':'เพิ่มรายการ'}},
     {'bounds':{'x':833,'y':0,'width':834,'height':843},'action':{'type':'message','text':'รายการล่าสุด'}},
-    {'bounds':{'x':1667,'y':0,'width':833,'height':843},'action':{'type':'message','text':'สรุปเงิน'}},
+    {'bounds':{'x':1667,'y':0,'width':833,'height':843},'action':{'type':'message','text':'สรุปเดือนนี้'}},
     {'bounds':{'x':0,'y':843,'width':833,'height':843},'action':{'type':'message','text':'บ้านของฉัน'}},
     {'bounds':{'x':833,'y':843,'width':834,'height':843},'action':{'type':'message','text':'เคลียร์ยอด'}},
     {'bounds':{'x':1667,'y':843,'width':833,'height':843},'action':{'type':'uri','uri':os.getenv('DASHBOARD_URL','https://meetang-bot.onrender.com')}},
