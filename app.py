@@ -28,7 +28,7 @@ def setup_rich_menu_on_startup():
     if not LINE_ACCESS_TOKEN:
         print('Rich Menu: skipped (LINE access token is missing)')
         return
-    image_path = os.path.join(os.path.dirname(__file__), 'rich_menu.png')
+    image_path = os.path.join(os.path.dirname(__file__), 'rich_menu.jpg')
     if not os.path.exists(image_path):
         print('Rich Menu: skipped (rich_menu.png is missing)')
         return
@@ -38,7 +38,7 @@ def setup_rich_menu_on_startup():
         menu_data = {
             'size': {'width': 2500, 'height': 1686},
             'selected': True,
-            'name': 'MeeTang Main Menu v29 Dashboard',
+            'name': 'MeeTang Main Menu v31 Dashboard',
             'chatBarText': '💰 มีตังค์',
             'areas': [
                 {'bounds': {'x': 0, 'y': 0, 'width': 833, 'height': 843},
@@ -70,7 +70,7 @@ def setup_rich_menu_on_startup():
         with open(image_path, 'rb') as f:
             r = requests.post(
                 f'https://api-data.line.me/v2/bot/richmenu/{menu_id}/content',
-                headers={**headers, 'Content-Type': 'image/png'},
+                headers={**headers, 'Content-Type': 'image/jpeg'},
                 data=f,
                 timeout=60
             )
@@ -100,7 +100,7 @@ def setup_rich_menu_on_startup():
             except Exception as user_err:
                 print('Rich Menu user link error:', uid, repr(user_err))
 
-        print('Rich Menu v30 activated:', menu_id, 'linked_users:', linked)
+        print('Rich Menu v31 activated:', menu_id, 'linked_users:', linked)
     except Exception as e:
         print('Rich Menu setup error:', repr(e))
 

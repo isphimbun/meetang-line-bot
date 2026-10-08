@@ -77,3 +77,6 @@ Dashboard opens DASHBOARD_URL (default: https://meetang-bot.onrender.com).
 
 ## v30 Rich Menu Fix
 - Explicitly links the new Rich Menu to every user in the database so old user-specific menus are replaced.
+
+## v31 Rich Menu Image Fix
+LINE Rich Menu images must be <= 1 MB. The approved artwork is compressed to JPEG (517,622 bytes, quality 88) and the uploader uses image/jpeg.
