@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>MeeTang — Dashboard</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
 <style>
 :root{--bg:#fff8fb;--card:#fff;--ink:#352c31;--muted:#8c8088;--pink:#ff9fbd;--pink2:#ffe6ef;--green:#94d9b1;--green2:#e7f8ee;--blue:#a8d7f5;--blue2:#e8f4fc;--yellow:#ffd98d;--yellow2:#fff3d3;--purple:#c9b8ef;--purple2:#f0eafb;--line:#eee4e9;--shadow:0 10px 30px rgba(135,105,122,.10)}
 *{box-sizing:border-box}body{margin:0;background:linear-gradient(180deg,#fff8fb,#f8fbff);color:var(--ink);font-family:"Noto Sans Thai",Arial,sans-serif}.shell{max-width:1180px;margin:auto;padding:18px}.app{display:grid;grid-template-columns:220px 1fr;min-height:calc(100vh - 36px);background:#fff;border:1px solid var(--line);border-radius:28px;overflow:hidden;box-shadow:var(--shadow)}
@@ -13,6 +14,207 @@
 
 .inst-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:14px}.inst-card{border:1px solid var(--line);border-radius:18px;padding:16px;background:#fff}.inst-card h3{margin:0;font-size:16px}.inst-card .big{font-size:24px;font-weight:800;margin-top:8px}.inst-progress{height:8px;background:#eee;border-radius:9px;overflow:hidden;margin:10px 0}.inst-progress span{display:block;height:100%;background:#76c897}.inst-meta{display:flex;justify-content:space-between;color:var(--muted);font-size:11px}.inst-kpi{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:14px}.inst-kpi .loan-card{min-height:78px}.status-good{color:#32804e;background:#eaf8ef;padding:5px 8px;border-radius:999px;font-size:11px}.status-warn{color:#a36d17;background:#fff4d8;padding:5px 8px;border-radius:999px;font-size:11px}
 @media(max-width:850px){.app{grid-template-columns:1fr}.side{border-right:0;border-bottom:1px solid var(--line);padding:12px}.brand{padding-bottom:10px}.nav{grid-template-columns:repeat(5,1fr)}.nav button{font-size:12px;text-align:center}.sidefoot{display:none}.columns{grid-template-columns:1fr}.cards{grid-template-columns:1fr}.loan-grid{grid-template-columns:1fr 1fr}.inst-grid{grid-template-columns:1fr}.inst-kpi{grid-template-columns:1fr 1fr}.loan-layout,.loan-two{grid-template-columns:1fr}.top{align-items:flex-start;flex-direction:column}.topright{width:100%;justify-content:space-between}.housegrid{grid-template-columns:1fr 1fr}.cat{grid-template-columns:100px 1fr 60px 40px}}
+
+/* Mobile polish v19 */
+@media (max-width: 600px){
+  body{background:#fff8fb}
+  .shell{max-width:none;margin:0;padding:0}
+  .app{display:block;min-height:100vh;border:0;border-radius:0;box-shadow:none;background:#fff}
+  .side{position:sticky;top:0;z-index:15;border-right:0;border-bottom:1px solid var(--line);padding:10px 10px 8px;background:rgba(255,250,253,.97);backdrop-filter:blur(12px)}
+  .brand{padding:0 4px 8px;gap:8px}
+  .logo{width:38px;height:38px;border-radius:12px;font-size:21px}
+  .brand b{font-size:18px}
+  .brand small{font-size:9px}
+  .nav{display:flex;gap:6px;overflow-x:auto;overflow-y:hidden;padding:0 2px 3px;scrollbar-width:none;-webkit-overflow-scrolling:touch}
+  .nav::-webkit-scrollbar{display:none}
+  .nav button{flex:0 0 auto;min-width:70px;padding:8px 9px;border-radius:12px;font-size:11px;line-height:1.25;text-align:center;white-space:nowrap}
+  .nav button.active{font-weight:800}
+  .sidefoot{display:none}
+  .main{padding:12px 12px 28px}
+  .top{gap:8px}
+  .housepick{width:100%;justify-content:center;padding:8px 10px}
+  .topright{width:100%;gap:6px;overflow:hidden}
+  .month{flex:1;justify-content:center;min-width:0;padding:8px 6px}
+  .topright .btn{flex:0 0 auto;padding:9px 10px;font-size:12px}
+  .hero{margin:14px 0 10px;align-items:flex-start;gap:10px}
+  .hero h1{font-size:20px}
+  .hero p{font-size:11px}
+  .cards{grid-template-columns:1fr 1fr;gap:8px}
+  .metric{padding:12px;border-radius:15px}
+  .metric strong{font-size:18px}
+  .columns,.loan-layout,.loan-two{grid-template-columns:1fr;gap:10px}
+  .loan-hero{padding:14px;margin-top:10px;border-radius:18px;align-items:flex-start;flex-direction:column}
+  .loan-hero h1{font-size:21px}
+  .loan-hero p{font-size:11px}
+  .loan-actions{width:100%}
+  .loan-actions .btn{flex:1;min-width:0}
+  .loan-grid{grid-template-columns:1fr 1fr;gap:8px}
+  .loan-card{padding:12px;border-radius:15px}
+  .loan-card strong{font-size:18px}
+  .loan-chart{height:210px;gap:4px;padding:12px 5px 4px}
+  .loan-two{margin-top:10px}
+  .panel{padding:13px;border-radius:16px}
+  .panel h2{font-size:15px}
+  .housegrid{grid-template-columns:1fr 1fr}
+  .cat{grid-template-columns:85px 1fr 55px 34px;font-size:11px}
+  .inst-grid{grid-template-columns:1fr}
+  .inst-kpi{grid-template-columns:1fr 1fr}
+  .modal{padding:8px;align-items:flex-start}
+  .modalbox{max-height:calc(100dvh - 16px);padding:15px;border-radius:18px}
+  .modalhead h2{font-size:17px}
+  .input{font-size:16px}
+}
+@media (min-width:601px) and (max-width:850px){
+  .nav{display:flex;overflow-x:auto;gap:6px;scrollbar-width:none}
+  .nav::-webkit-scrollbar{display:none}
+  .nav button{flex:0 0 auto;white-space:nowrap}
+}
+
+/* v20 mobile navigation: no top menu; use fixed bottom navigation */
+.mobile-nav{display:none}
+@media(max-width:600px){
+  .side{display:none !important}
+  .app{grid-template-columns:1fr !important}
+  .main{padding:12px 12px 88px !important}
+  .top{flex-direction:row !important;align-items:center !important;gap:7px;position:sticky;top:0;z-index:10;background:rgba(255,255,255,.96);backdrop-filter:blur(10px);padding:7px 0}
+  .housepick{min-width:0;flex:1;padding:7px 8px}
+  .housepick select{max-width:125px;font-size:13px}
+  .topright{width:auto !important;display:flex;gap:5px;align-items:center}
+  .topright .month{padding:7px 5px;font-size:12px}
+  .topright .month b{font-size:11px}
+  .topright .btn:not(.primary){display:none}
+  .topright .btn.primary{padding:8px 10px;font-size:12px;white-space:nowrap}
+  .mobile-nav{position:fixed;display:grid;grid-template-columns:repeat(5,1fr);left:0;right:0;bottom:0;height:68px;background:rgba(255,250,253,.98);border-top:1px solid var(--line);box-shadow:0 -8px 24px #00000012;z-index:50;padding:5px 7px calc(5px + env(safe-area-inset-bottom));backdrop-filter:blur(14px)}
+  .mobile-nav button{border:0;background:transparent;border-radius:13px;color:#665a62;font:inherit;font-size:10px;line-height:1.15;padding:5px 2px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;min-width:0}
+  .mobile-nav button span:first-child{font-size:20px;line-height:20px}
+  .mobile-nav button.active{background:#ffdfe9;color:#c94870;font-weight:800}
+  .mobile-more{display:grid;gap:8px}
+  .mobile-more button{width:100%;text-align:left}
+  .mobile-more .btn{padding:12px 13px}
+}
+
+
+/* v21 mobile UI: mockup-inspired redesign */
+.mobile-brand{display:none}
+@media(max-width:600px){
+  body{background:linear-gradient(180deg,#fff8fb 0%,#fbfaff 100%);}
+  .shell{padding:0!important;max-width:none!important}
+  .app{border:0!important;border-radius:0!important;min-height:100dvh!important;box-shadow:none!important;background:#fff8fb!important}
+  .main{background:transparent!important;padding:0 14px 94px!important}
+  .mobile-brand{display:flex;align-items:center;gap:10px;padding:14px 3px 8px}
+  .mobile-brand-logo{width:42px;height:42px;border-radius:14px;background:#ffe4ee;display:grid;place-items:center;font-size:25px}
+  .mobile-brand b{font-size:20px;line-height:1}
+  .mobile-brand small{display:block;color:var(--muted);font-size:10px;margin-top:3px}
+  .mobile-bell{margin-left:auto;border:0;background:#fff;border:1px solid var(--line);width:40px;height:40px;border-radius:13px;font-size:20px}
+  .top{position:static!important;display:grid!important;grid-template-columns:1fr auto;gap:8px!important;padding:0 0 8px!important;background:transparent!important}
+  .housepick{width:100%!important;justify-content:flex-start!important;background:#fff!important;border-radius:14px!important;padding:9px 10px!important;box-shadow:0 3px 12px rgba(135,105,122,.06)}
+  .housepick select{max-width:150px;font-size:13px}
+  .topright{grid-column:1/-1;width:100%!important;display:grid!important;grid-template-columns:1fr auto!important;gap:7px!important}
+  .topright .month{display:flex!important;justify-content:center;min-width:0;padding:9px 7px!important;background:#fff;border-radius:14px}
+  .topright .month b{font-size:12px}
+  .topright .btn.primary{display:block!important;padding:9px 14px!important;border-radius:14px!important;font-size:12px}
+  .hero{margin:12px 0 10px!important;align-items:flex-start!important}
+  .hero h1{font-size:21px!important}
+  .hero p{font-size:11px!important}
+  .cards{display:flex!important;overflow-x:auto!important;gap:8px!important;padding-bottom:2px!important;scrollbar-width:none}
+  .cards::-webkit-scrollbar{display:none}
+  .metric{min-width:108px!important;flex:1 0 108px!important;padding:12px!important;border-radius:17px!important}
+  .metric small{font-size:10px!important}
+  .metric strong{font-size:18px!important}
+  .columns{display:block!important;margin-top:10px!important}
+  .columns>.panel{margin-bottom:10px}
+  .panel{border-radius:18px!important;padding:14px!important;box-shadow:0 3px 14px rgba(135,105,122,.045)}
+  .panel h2{font-size:15px!important}
+  .houses{display:none}
+  .cat{grid-template-columns:90px 1fr 62px!important;font-size:10px!important}
+  .cat>span:last-child{display:none}
+  .tx{padding:10px 0!important}
+  .tx b{font-size:12px!important}
+
+  /* Loan page */
+  .loan-hero{margin-top:7px!important;padding:15px!important;border-radius:20px!important;display:block!important}
+  .loan-hero h1{font-size:21px!important}
+  .loan-hero p{font-size:11px!important;line-height:1.45}
+  .loan-actions{margin-top:10px!important;display:grid!important;grid-template-columns:1fr 1fr!important}
+  .loan-actions .btn{width:100%!important;font-size:11px!important;padding:9px 7px!important}
+  .loan-grid{display:flex!important;overflow-x:auto!important;gap:8px!important;scrollbar-width:none!important;margin-top:9px!important}
+  .loan-grid::-webkit-scrollbar{display:none}
+  .loan-card{min-width:142px!important;padding:12px!important;border-radius:16px!important}
+  .loan-card strong{font-size:18px!important}
+  .loan-grid .loan-card:first-child{min-width:170px!important}
+  .loan-layout{display:flex!important;flex-direction:column!important;gap:10px!important;margin-top:10px!important}
+  .loan-layout>.panel{width:100%!important}
+  .loan-layout>.panel:nth-child(1){order:2}
+  .loan-layout>.panel:nth-child(2){order:1}
+  .loan-layout>.panel:nth-child(3){order:3}
+  .donut{width:180px!important;height:180px!important}
+  .loan-chart{height:180px!important;gap:3px!important;padding:12px 4px 4px!important}
+  .loan-chart .bar{min-width:4px!important}
+  .loan-two{display:block!important;margin-top:10px!important}
+  .loan-two>.panel{margin-bottom:10px}
+  .loan-table{font-size:10px!important;min-width:520px}
+  .loan-two .loan-table{min-width:470px}
+  .loan-list{gap:7px!important}
+  .loan-row{padding:10px!important;font-size:12px!important}
+
+  /* Installment page */
+  .inst-kpi{display:flex!important;overflow-x:auto!important;gap:8px!important;scrollbar-width:none!important}
+  .inst-kpi::-webkit-scrollbar{display:none}
+  .inst-kpi .loan-card{min-width:145px!important}
+  .inst-grid{display:block!important;margin-top:10px!important}
+  .inst-card{margin-bottom:9px!important;border-radius:18px!important;padding:14px!important}
+  .inst-card h3{font-size:15px!important}
+  .inst-card .big{font-size:21px!important}
+
+  /* modal / forms */
+  .modal{padding:0!important;align-items:flex-end!important}
+  .modalbox{width:100%!important;max-width:none!important;max-height:88dvh!important;border-radius:24px 24px 0 0!important;padding:17px!important;margin:0!important}
+  .modalhead{position:sticky;top:0;background:#fff;z-index:2;padding-bottom:8px}
+  .modalhead h2{font-size:17px!important}
+  .input{font-size:16px!important}
+
+  /* bottom nav */
+  .mobile-nav{height:72px!important;padding:6px 6px calc(6px + env(safe-area-inset-bottom))!important;border-radius:18px 18px 0 0!important}
+  .mobile-nav button{font-size:10px!important}
+  .mobile-nav button span:first-child{font-size:20px!important}
+  .mobile-nav button.active{background:#ffe1eb!important}
+}
+
+/* v22 polished mobile UI */
+@media(max-width:600px){
+  body{font-size:14px;}
+  .mobile-brand{padding:16px 2px 10px;}
+  .mobile-brand-logo{width:44px;height:44px;border-radius:15px;box-shadow:0 6px 18px rgba(255,120,160,.16);}
+  .mobile-bell{width:42px;height:42px;border-radius:14px;color:#4d444a;font-size:17px;box-shadow:0 4px 14px rgba(80,50,70,.06);}
+  .housepick{min-height:48px!important;border-color:#eee3e8!important;box-shadow:0 6px 18px rgba(94,61,80,.06)!important;}
+  .housepick:before{content:' ';}
+  .topright{grid-template-columns:1fr auto!important;}
+  .topright .month{min-height:44px;box-shadow:0 4px 14px rgba(94,61,80,.05);}
+  .topright .btn.primary{min-height:44px;box-shadow:0 7px 16px rgba(255,126,164,.22);}
+  .hero{margin-top:14px!important;}
+  .hero h1{letter-spacing:-.3px;}
+  .cards{margin-right:-14px;padding-right:14px!important;}
+  .metric{border:1px solid rgba(255,255,255,.8);box-shadow:0 6px 16px rgba(95,65,85,.05);}
+  .panel{border-color:#eee5e9!important;box-shadow:0 6px 20px rgba(95,65,85,.045)!important;}
+  .loan-hero{background:linear-gradient(135deg,#f4fcf7,#fff8ee)!important;box-shadow:0 7px 22px rgba(91,125,104,.07);}
+  .loan-grid{margin-right:-14px;padding-right:14px;}
+  .loan-card{box-shadow:0 5px 16px rgba(90,65,80,.04);border-color:#eee5e9;}
+  .donut{box-shadow:0 8px 24px rgba(80,60,80,.06);}
+  .inst-card{box-shadow:0 7px 20px rgba(90,65,80,.05);}
+  .mobile-nav{height:76px!important;padding:7px 8px calc(7px + env(safe-area-inset-bottom))!important;background:rgba(255,252,254,.97)!important;border-top:1px solid #eadfe5!important;box-shadow:0 -10px 30px rgba(78,51,68,.09)!important;}
+  .mobile-nav button{position:relative;color:#83767e!important;font-size:10px!important;font-weight:600!important;border-radius:15px!important;gap:4px!important;}
+  .mobile-nav .nav-icon{width:34px;height:28px;display:grid;place-items:center;font-size:17px!important;line-height:1!important;}
+  .mobile-nav button.active{background:linear-gradient(180deg,#ffe1eb,#ffd6e5)!important;color:#c94770!important;}
+  .mobile-nav button.active .nav-icon{background:#fff;border-radius:10px;box-shadow:0 3px 8px rgba(210,92,127,.12);}
+  .mobile-nav button:active{transform:scale(.97);}
+  .mobile-more{gap:10px!important;}
+  .mobile-more .btn{min-height:58px!important;border:1px solid #eee4e9!important;background:#fff!important;border-radius:17px!important;text-align:left!important;box-shadow:0 5px 16px rgba(90,65,80,.045);font-size:14px!important;font-weight:700!important;}
+  .mobile-more .btn i{width:26px;margin-right:7px;color:#d85d82;}
+  .modal{background:rgba(42,31,38,.48)!important;backdrop-filter:blur(3px);}
+  .modalbox{border:1px solid #eadfe5!important;box-shadow:0 -10px 50px rgba(45,32,40,.22)!important;}
+  .modalhead{border-bottom:1px solid #f0e7eb;margin:0 -17px 12px;padding:0 17px 10px!important;}
+}
+@media(min-width:601px){.mobile-nav{display:none!important}}
 </style>
 </head>
 <body>
@@ -33,7 +235,7 @@ async function loadData(){[summary,recent]=await Promise.all([api(`/api/summary?
 function hname(){return houses.find(h=>h.id===activeId)?.name||'บ้านของเรา'}
 function fmtMonth(v){const [y,m]=v.split('-');return ['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'][+m-1]+' '+(+y+543)}
 function fmtDate(v){return new Date(v).toLocaleDateString('th-TH',{day:'numeric',month:'short'})}
-function render(){const cmdBtn=(isAdmin()||isSuperAdmin)?`<button class="btn" onclick="tab='settings';render()">🤖 คำสั่งบอท</button>`:'';const loanNav=featureOn('loan')?`<button class="${tab==='loan'?'active':''}" onclick="tab='loan';render()">🏠 บ้าน & สินเชื่อ</button>`:'';const instNav=featureOn('installment')?`<button class="${tab==='installment'?'active':''}" onclick="tab='installment';render()">💳 รายการผ่อน</button>`:'';const settingsNav=(isAdmin()||isSuperAdmin)?`<button class="${tab==='settings'?'active':''}" onclick="tab='settings';render()">⚙️ ตั้งค่า</button>`:`<button class="${tab==='settings'?'active':''}" onclick="tab='settings';render()">⚙️ บัญชี</button>`;root.innerHTML=`<div class="shell"><div class="app"><aside class="side"><div class="brand"><div class="logo">🐰</div><div><b>MeeTang</b><small>มีตังค์ ไม่งงเรื่องเงิน</small></div></div><nav class="nav"><button class="${tab==='home'?'active':''}" onclick="tab='home';render()">🏠 หน้าหลัก</button><button class="${tab==='list'?'active':''}" onclick="tab='list';render()">📝 รายการ</button><button class="${tab==='summary'?'active':''}" onclick="tab='summary';render()">📊 สรุปรายเดือน</button><button onclick="openHouses()">🏠 บัญชีร่วม</button>${loanNav}${instNav}${settingsNav}</nav><div class="sidefoot">🐰 <b>ใช้งานผ่าน LINE</b><br>พิมพ์รายรับ/รายจ่ายได้เลย แล้วเลือกบ้านที่ต้องการดูจากด้านบน</div></aside><main class="main"><div class="top"><div class="housepick">🏠 <select onchange="switchHouse(this.value)">${houses.map(h=>`<option value="${h.id}" ${h.id===activeId?'selected':''}>${h.name}${h.id===activeId?' ⭐':''}</option>`).join('')}</select></div><div class="topright"><div class="month"><button onclick="shift(-1)">‹</button><b>📅 ${fmtMonth(month)}</b><button onclick="shift(1)">›</button></div>${cmdBtn}<button class="btn primary" onclick="showAddHelp()">＋ เพิ่มรายการ</button></div></div>${tab==='home'?home():tab==='list'?listPage():tab==='summary'?summaryPage():tab==='loan'?loanPage():tab==='installment'?installmentPage():settingsPage()}</main></div></div>`}
+function render(){const cmdBtn=(isAdmin()||isSuperAdmin)?`<button class="btn" onclick="tab='settings';render()">🤖 คำสั่งบอท</button>`:'';const loanNav=featureOn('loan')?`<button class="${tab==='loan'?'active':''}" onclick="tab='loan';render()">🏠 บ้าน & สินเชื่อ</button>`:'';const instNav=featureOn('installment')?`<button class="${tab==='installment'?'active':''}" onclick="tab='installment';render()">💳 รายการผ่อน</button>`:'';const settingsNav=(isAdmin()||isSuperAdmin)?`<button class="${tab==='settings'?'active':''}" onclick="tab='settings';render()">⚙️ ตั้งค่า</button>`:`<button class="${tab==='settings'?'active':''}" onclick="tab='settings';render()">⚙️ บัญชี</button>`;const mobileMore=featureOn('loan')||featureOn('installment')||isAdmin()||isSuperAdmin;root.innerHTML=`<div class="shell"><div class="app"><aside class="side"><div class="brand"><div class="logo">🐰</div><div><b>MeeTang</b><small>มีตังค์ ไม่งงเรื่องเงิน</small></div></div><nav class="nav"><button class="${tab==='home'?'active':''}" onclick="tab='home';render()">🏠 หน้าหลัก</button><button class="${tab==='list'?'active':''}" onclick="tab='list';render()">📝 รายการ</button><button class="${tab==='summary'?'active':''}" onclick="tab='summary';render()">📊 สรุปรายเดือน</button><button onclick="openHouses()">🏠 บัญชีร่วม</button>${loanNav}${instNav}${settingsNav}</nav><div class="sidefoot">🐰 <b>ใช้งานผ่าน LINE</b><br>พิมพ์รายรับ/รายจ่ายได้เลย แล้วเลือกบ้านที่ต้องการดูจากด้านบน</div></aside><main class="main"><div class="mobile-brand"><div class="mobile-brand-logo">🐰</div><div><b>MeeTang</b><small>มีตังค์ ไม่งงเรื่องเงิน</small></div><button class="mobile-bell" onclick="showAddHelp()" aria-label="การแจ้งเตือน"><i class="fa-regular fa-bell"></i></button></div><div class="top"><div class="housepick">🏠 <select onchange="switchHouse(this.value)">${houses.map(h=>`<option value="${h.id}" ${h.id===activeId?'selected':''}>${h.name}${h.id===activeId?' ⭐':''}</option>`).join('')}</select></div><div class="topright"><div class="month"><button onclick="shift(-1)">‹</button><b>📅 ${fmtMonth(month)}</b><button onclick="shift(1)">›</button></div>${cmdBtn}<button class="btn primary" onclick="showAddHelp()">＋ เพิ่มรายการ</button></div></div>${tab==='home'?home():tab==='list'?listPage():tab==='summary'?summaryPage():tab==='loan'?loanPage():tab==='installment'?installmentPage():settingsPage()}</main></div><nav class="mobile-nav" aria-label="เมนูหลัก"><button class="${tab==='home'?'active':''}" onclick="tab='home';render()"><span class="nav-icon"><i class="fa-solid fa-house"></i></span><span>หน้าหลัก</span></button><button class="${tab==='list'?'active':''}" onclick="tab='list';render()"><span class="nav-icon"><i class="fa-solid fa-receipt"></i></span><span>รายการ</span></button><button class="${tab==='summary'?'active':''}" onclick="tab='summary';render()"><span class="nav-icon"><i class="fa-solid fa-chart-column"></i></span><span>สรุป</span></button><button onclick="openHouses()"><span class="nav-icon"><i class="fa-solid fa-house-chimney"></i></span><span>บ้าน</span></button><button onclick="openMobileMore()"><span class="nav-icon"><i class="fa-solid fa-ellipsis"></i></span><span>เพิ่มเติม</span></button></nav></div>`}
 function home(){return `<div class="hero"><div><h1>สรุปการเงิน · ${hname()}</h1><p>ภาพรวมรายรับ รายจ่าย และเงินคงเหลือของบ้านนี้</p></div></div><div class="cards"><div class="metric in"><small>💰 รายรับ</small><strong>${money(summary.income)}</strong></div><div class="metric out"><small>💸 รายจ่าย</small><strong>${money(summary.expense)}</strong></div><div class="metric bal"><small>💚 คงเหลือ</small><strong>${money(summary.balance)}</strong></div></div><div class="columns"><div class="panel"><h2>📊 รายจ่ายตามหมวด</h2>${cats()}</div><div class="panel"><h2>📋 รายการล่าสุด</h2>${recentRows()}</div></div><div class="panel houses"><h2>🏠 บ้านที่ฉันมี</h2><div class="housegrid">${houses.map(h=>`<button class="house ${h.id===activeId?'active':''}" onclick="switchHouse(${h.id})">🏠 <b>${h.name}${h.id===activeId?' ⭐':''}</b><small>${h.role==='owner'?'ADMIN / เจ้าของ':h.role==='admin'?'ADMIN':'สมาชิก'} · รหัส ${h.invite_code}</small></button>`).join('')}</div></div>`}
 function cats(){if(!summary.categories?.length)return '<div class="empty">เดือนนี้ยังไม่มีรายจ่าย</div>';const max=summary.categories[0].total||1;return summary.categories.slice(0,6).map(c=>`<div class="cat"><span>${icon[c.category]||'📦'} ${c.category}</span><div class="bar"><div class="fill" style="width:${Math.min(100,c.total/max*100)}%"></div></div><b>${money(c.total)}</b><span>${(c.total/Math.max(summary.expense,1)*100).toFixed(1)}%</span></div>`).join('')}
 function recentRows(){if(!recent.length)return '<div class="empty">ยังไม่มีรายการ</div>';return recent.map(r=>`<div class="tx"><span class="ico">${icon[r.category]||'📦'}</span><div><b>${r.merchant||r.note||r.category}</b><small>${r.category} · ${fmtDate(r.occurred_at)}</small></div><b class="${r.type==='income'?'positive':'negative'}">${r.type==='income'?'+':'-'}${money(r.amount)}</b></div>`).join('')}
@@ -115,6 +317,7 @@ async function backupDb(){if(!isAdmin())return;window.location.href='/api/backup
 async function switchHouse(id){activeId=Number(id);await api('/api/households/switch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({user_id:uid,household_id:activeId})});await load()}
 function shift(n){const d=new Date(month+'-01');d.setMonth(d.getMonth()+n);month=d.toISOString().slice(0,7);loadData().then(render)}
 function showAddHelp(){alert('กลับไปที่ LINE แล้วพิมพ์ เช่น “กินข้าว 60” หรือ “เงินเดือน 25000”')}
+function openMobileMore(){const items=[];if(featureOn('loan'))items.push(`<button class="btn" onclick="tab='loan';closeModal();render()"><i class="fa-solid fa-house-chimney"></i> บ้าน & สินเชื่อ</button>`);if(featureOn('installment'))items.push(`<button class="btn" onclick="tab='installment';closeModal();render()"><i class="fa-solid fa-credit-card"></i> รายการผ่อน</button>`);if(isAdmin()||isSuperAdmin)items.push(`<button class="btn" onclick="tab='settings';closeModal();render()"><i class="fa-solid fa-gear"></i> ตั้งค่า</button>`);items.push(`<button class="btn" onclick="showAddHelp();closeModal()"><i class="fa-solid fa-plus"></i> เพิ่มรายการ</button>`);document.getElementById('modalTitle').textContent='☰ เมนูเพิ่มเติม';document.getElementById('modalBody').innerHTML=`<div class="mobile-more">${items.join('')}</div>`;document.getElementById('modal').classList.add('show')}
 function closeModal(){document.getElementById('modal').classList.remove('show')}
 function openHouses(){document.getElementById('modalTitle').textContent='🏠 บ้านของฉัน';document.getElementById('modalBody').innerHTML=`<p style="color:#8c8088">เลือกบ้าน หรือจัดการบ้าน</p><div class="manage">${houses.map(h=>`<div class="row"><div><b>${h.name}${h.id===activeId?' ⭐':''}</b><small style="display:block;color:#8c8088">${h.role==='owner'?'ADMIN / เจ้าของ':h.role==='admin'?'ADMIN':'สมาชิก'} · ${h.invite_code}</small></div><div class="actions"><button class="btn" onclick="switchHouse(${h.id});closeModal()">ใช้บ้านนี้</button>${h.role==='owner'?`<button class="btn" onclick="renameHouse(${h.id},'${h.name.replace(/'/g,"\\'")}')">แก้ชื่อ</button><button class="btn" onclick="deleteHouse(${h.id},'${h.name.replace(/'/g,"\\'")}')">ลบ</button>`:''}</div></div>`).join('')}</div><div style="margin-top:12px"><button class="btn primary" onclick="createHouse()">＋ สร้างบ้านใหม่</button></div>`;document.getElementById('modal').classList.add('show')}
 async function createHouse(){const n=prompt('ชื่อบ้านใหม่ เช่น ร้านขนม / บ้านแม่ / เที่ยวญี่ปุ่น');if(!n?.trim())return;await api('/api/households/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({user_id:uid,name:n.trim()})});await load();openHouses()}
