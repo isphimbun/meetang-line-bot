@@ -11,7 +11,7 @@ from database import (init_db, upsert_user, create_household, join_household, ge
                       get_categories, delete_transaction, set_display_name, get_household, get_settlement,
                       rename_household, delete_household, leave_household, is_household_admin,
                       get_member_permissions, set_member_features, set_member_role, user_has_feature, get_all_user_ids, get_mortgage, is_super_admin, get_global_feature_permissions, set_global_feature, is_super_admin, get_global_feature_permissions, set_global_feature, global_user_has_feature, save_mortgage, add_mortgage_payment, mortgage_forecast, get_house_insurance,
-    insurance_forecast, add_house_insurance_payment, add_house_insurance, get_house_expenses, add_house_expense, get_installments, add_installment, add_installment_payment, update_mortgage_payment, delete_mortgage_payment, update_house_insurance_payment, delete_house_insurance_payment)
+    insurance_forecast, add_house_insurance_payment, delete_house_insurance, add_house_insurance, get_house_expenses, add_house_expense, get_installments, add_installment, add_installment_payment, update_mortgage_payment, delete_mortgage_payment, update_house_insurance_payment, delete_house_insurance_payment)
 from ai import parse_text, parse_slip
 from split_utils import parse_split_instruction
 from chat_actions import handle_house_chat
@@ -365,6 +365,11 @@ async def api_loan_insurance(request: Request):
     row=add_house_insurance(user_id,hid,payload)
     if row is None: raise HTTPException(status_code=400, detail='save failed')
     return row
+
+@app.delete('/api/loan/insurance/{insurance_id}')
+async def api_delete_insurance(insurance_id:int, user_id:str, household_id:int):
+    if not delete_house_insurance(user_id,household_id,insurance_id): raise HTTPException(status_code=403,detail='delete failed')
+    return {'ok':True}
 
 @app.post('/api/loan/insurance/payment')
 async def api_loan_insurance_payment(request: Request):

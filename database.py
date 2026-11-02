@@ -632,6 +632,18 @@ def delete_house_insurance_payment(user_id, household_id, payment_id):
     with conn() as c:
         cur=c.execute('DELETE FROM house_insurance_payments WHERE id=? AND insurance_id IN (SELECT id FROM house_insurance WHERE household_id=?)',(int(payment_id),household_id)); c.commit(); return cur.rowcount>0
 
+def delete_house_insurance(user_id, household_id, insurance_id):
+    """ลบกรมธรรม์ประกันทั้งรายการ (รวมรายการจ่ายงวดของประกันนั้น) — เฉพาะ owner/admin ของบ้าน"""
+    if not is_household_admin(user_id, household_id): return False
+    iid=int(insurance_id)
+    with conn() as c:
+        ok=c.execute('SELECT 1 FROM house_insurance WHERE id=? AND household_id=?',(iid,household_id)).fetchone()
+        if not ok: return False
+        c.execute('DELETE FROM house_insurance_payments WHERE insurance_id=?',(iid,))
+        c.execute('DELETE FROM house_insurance WHERE id=? AND household_id=?',(iid,household_id))
+        c.commit()
+    return True
+
 def insurance_forecast(insurance, mortgage, months=120):
     if not insurance or str(insurance.get('payment_method'))!='ผ่อนแยก': return []
     balance=float(insurance.get('financed_amount') or insurance.get('amount') or 0)
