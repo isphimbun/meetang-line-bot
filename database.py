@@ -463,6 +463,52 @@ def _num(v, default=None):
     try: return float(v)
     except (TypeError, ValueError): return default
 
+
+# ===== ดอกเบี้ยรายวัน (Actual/365) =====
+# ดอกเบี้ย = ยอดต้นคงเหลือ × อัตรา% ÷ 365 × จำนวนวันจริงนับจากวันจ่ายงวดก่อน (งวดแรกนับจากวันเริ่มสัญญา)
+# ตัดทศนิยมทิ้งเป็น 2 ตำแหน่ง (ไม่ปัดขึ้น) ตรงกับที่ธนาคารคิด
+from decimal import Decimal, ROUND_DOWN
+import calendar as _cal
+from datetime import date as _date
+
+def _to_date(v):
+    s=str(v)[:10]
+    return _date(int(s[:4]),int(s[5:7]),int(s[8:10]))
+
+def accrue_interest(balance, d1, d2, rate_for_ym):
+    """ดอกเบี้ยตั้งแต่ d1 ถึง d2 (นับวันจริง, ปีละ 365 วัน). rate_for_ym(ym)->อัตรา% ต่อปีของเดือนนั้น"""
+    d1,d2=_to_date(d1),_to_date(d2)
+    balance=float(balance or 0)
+    if d2<=d1 or balance<=0: return 0.0
+    total=Decimal(0); cur=d1
+    while cur<d2:
+        nxt=_date(cur.year+(1 if cur.month==12 else 0), 1 if cur.month==12 else cur.month+1, 1)
+        end=min(nxt,d2); days=(end-cur).days
+        rate=Decimal(str(rate_for_ym(f'{cur.year:04d}-{cur.month:02d}') or 0))
+        total+=Decimal(str(balance))*rate/Decimal(100)/Decimal(365)*days
+        cur=end
+    return float(total.quantize(Decimal('0.01'),rounding=ROUND_DOWN))
+
+def _due_on(year, month, day):
+    return _date(year,month,min(int(day or 31),_cal.monthrange(year,month)[1]))
+
+def _next_due(prev, day):
+    """วันครบกำหนดถัดไปหลังวันที่ prev (day=วันที่ของเดือน; เกินเดือนนั้นใช้วันสุดท้ายของเดือน)"""
+    prev=_to_date(prev)
+    c=_due_on(prev.year,prev.month,day)
+    if c>prev: return c
+    y,m=(prev.year+1,1) if prev.month==12 else (prev.year,prev.month+1)
+    return _due_on(y,m,day)
+
+def _mortgage_rate_fn(m): return lambda ym:_rate_for_month(m,ym)
+def _insurance_rate_fn(ins, mortgage):
+    if ins.get('rate_mode')=='custom':
+        r=float(ins.get('rate_percent') or 0); return lambda ym:r
+    return lambda ym:_rate_for_month(mortgage,ym)
+
+def _ordered(rows):
+    return sorted(rows,key=lambda x:(str(x.get('payment_date') or '')[:10],int(x.get('id') or 0)))
+
 def calc_monthly_payment(principal, annual_rate, months):
     principal=float(principal or 0); annual_rate=float(annual_rate or 0); months=int(months or 0)
     if principal<=0 or months<=0: return 0.0
@@ -499,6 +545,14 @@ def save_mortgage(user_id, household_id, data):
         c.commit()
     return get_mortgage(household_id)
 
+def _mortgage_state_before(m, payment_date, exclude_id=0):
+    """ยอดต้นคงเหลือ + วันที่จ่ายงวดก่อนหน้า (หรือวันเริ่มสัญญา) ก่อนวัน payment_date"""
+    pd=str(payment_date)[:10]
+    prior=[x for x in m.get('payments',[]) if int(x.get('id') or 0)!=int(exclude_id or 0) and str(x.get('payment_date') or '')[:10]<pd]
+    bal=float(m.get('loan_amount') or 0)-sum(float(x.get('principal') or 0)+float(x.get('extra_principal') or 0) for x in prior)
+    prev=max([str(x['payment_date'])[:10] for x in prior] or [str(m.get('start_date') or pd)[:10]])
+    return max(0.0,round(bal,2)),prev
+
 def add_mortgage_payment(user_id, household_id, data):
     if not user_has_feature(user_id, household_id, 'loan'): return None
     m=get_mortgage(household_id)
@@ -506,25 +560,40 @@ def add_mortgage_payment(user_id, household_id, data):
     amount=float(data.get('amount') or 0)
     extra=float(data.get('extra_principal') or 0)
     if amount<=0: return None
-    # Calculate the current outstanding principal from previously recorded payments.
-    paid_principal=sum(float(x.get('principal') or 0)+float(x.get('extra_principal') or 0) for x in m.get('payments',[]))
-    balance=max(0.0,float(m.get('loan_amount') or 0)-paid_principal)
-    payment_date=data.get('payment_date') or datetime.now(TZ).date().isoformat()
-    rate=_rate_for_month(m,payment_date[:7])
+    payment_date=str(data.get('payment_date') or datetime.now(TZ).date().isoformat())[:10]
+    balance,prev=_mortgage_state_before(m,payment_date)
     interest=float(data.get('interest') or 0)
     principal=float(data.get('principal') or 0)
-    # User only needs to enter the amount paid. Fill principal/interest automatically.
+    # ผู้ใช้กรอกแค่ยอดจ่าย — ระบบคิดดอกเบี้ยรายวันและเงินต้นให้เอง
     if interest<=0:
-        interest=round(balance*rate/100/12,2)
+        interest=accrue_interest(balance,prev,payment_date,_mortgage_rate_fn(m))
     if principal<=0:
         principal=round(max(0.0,amount-interest-extra),2)
     if amount < interest:
-        raise ValueError(f'ยอดจ่าย {amount:,.2f} ต่ำกว่าดอกเบี้ยงวดนี้ประมาณ {interest:,.2f}')
+        raise ValueError(f'ยอดจ่าย {amount:,.2f} ต่ำกว่าดอกเบี้ยงวดนี้ {interest:,.2f}')
     if principal+extra>balance:
         extra=max(0.0,round(balance-principal,2))
         principal=round(max(0.0,balance-extra),2)
     with conn() as c:
         cur=c.execute('INSERT INTO mortgage_payments(mortgage_id,payment_date,amount,principal,interest,extra_principal,note) VALUES(?,?,?,?,?,?,?)',(m['id'],payment_date,amount,principal,interest,extra,data.get('note','')))
+        c.commit()
+    return get_mortgage(household_id)
+
+def recalc_mortgage_payments(user_id, household_id):
+    """คำนวณเงินต้น/ดอกเบี้ยของงวดที่บันทึกไว้แล้วใหม่ทั้งหมดตามสูตรรายวัน (ยอดจ่าย/ยอดโปะคงเดิม)"""
+    if not is_household_admin(user_id, household_id): return None
+    m=get_mortgage(household_id)
+    if not m: return None
+    bal=float(m.get('loan_amount') or 0); prev=str(m.get('start_date') or '')[:10]; fn=_mortgage_rate_fn(m); upd=[]
+    for p in _ordered(m['payments']):
+        d=str(p['payment_date'])[:10]; amt=float(p['amount'] or 0); ex=float(p.get('extra_principal') or 0)
+        it=accrue_interest(bal,prev or d,d,fn)
+        pr=round(max(0.0,amt-it-ex),2)
+        if pr+ex>bal: ex=max(0.0,round(bal-pr,2)); pr=round(max(0.0,bal-ex),2)
+        upd.append((pr,it,ex,p['id'])); bal=round(max(0.0,bal-pr-ex),2); prev=d
+    with conn() as c:
+        for pr,it,ex,pid in upd:
+            c.execute('UPDATE mortgage_payments SET principal=?,interest=?,extra_principal=? WHERE id=?',(pr,it,ex,pid))
         c.commit()
     return get_mortgage(household_id)
 
@@ -540,12 +609,12 @@ def update_mortgage_payment(user_id, household_id, data):
     if not is_household_admin(user_id, household_id): return None
     pid=int(data.get('id') or 0); m=get_mortgage(household_id)
     if not m: return None
-    payment_date=data.get('payment_date') or datetime.now(TZ).date().isoformat(); amount=float(data.get('amount') or 0); extra=float(data.get('extra_principal') or 0)
+    payment_date=str(data.get('payment_date') or datetime.now(TZ).date().isoformat())[:10]; amount=float(data.get('amount') or 0); extra=float(data.get('extra_principal') or 0)
     if amount<=0: return None
-    with conn() as c:
-        prior=c.execute('SELECT COALESCE(SUM(principal+extra_principal),0) AS v FROM mortgage_payments WHERE mortgage_id=? AND id<>? AND payment_date<?',(m['id'],pid,payment_date)).fetchone()['v']
-    balance=max(0,float(m['loan_amount'] or 0)-float(prior or 0)); rate=_rate_for_month(m,payment_date[:7]); interest=float(data.get('interest') or 0) or round(balance*rate/100/12,2); principal=float(data.get('principal') or 0) or round(max(0,amount-interest-extra),2)
-    if amount<interest: raise ValueError(f'ยอดจ่าย {amount:,.2f} ต่ำกว่าดอกเบี้ยประมาณ {interest:,.2f}')
+    balance,prev=_mortgage_state_before(m,payment_date,pid)
+    interest=float(data.get('interest') or 0) or accrue_interest(balance,prev,payment_date,_mortgage_rate_fn(m))
+    principal=float(data.get('principal') or 0) or round(max(0,amount-interest-extra),2)
+    if amount<interest: raise ValueError(f'ยอดจ่าย {amount:,.2f} ต่ำกว่าดอกเบี้ย {interest:,.2f}')
     principal=min(principal,max(0,balance-extra))
     with conn() as c:
         c.execute('UPDATE mortgage_payments SET payment_date=?,amount=?,principal=?,interest=?,extra_principal=?,note=? WHERE id=? AND mortgage_id=?',(payment_date,amount,principal,interest,extra,data.get('note',''),pid,m['id'])); c.commit()
@@ -581,22 +650,47 @@ def save_house_insurance(user_id, household_id, data):
 def add_house_insurance(user_id, household_id, data):
     return save_house_insurance(user_id, household_id, data)
 
-def _insurance_payment_calc(ins, mortgage, payment_date, amount, principal, interest, exclude_id=0):
+def _insurance_state_before(ins, payment_date, exclude_id=0):
+    pd=str(payment_date)[:10]
     with conn() as c:
-        rows=c.execute('SELECT * FROM house_insurance_payments WHERE insurance_id=? AND id<>? ORDER BY payment_date,id',(int(ins['id']),int(exclude_id or 0))).fetchall()
-    paid_principal=sum(float(r['principal'] or 0) for r in rows)
-    balance=max(0.0,float(ins['financed_amount'] or ins['amount'] or 0)-paid_principal)
-    rate=float(ins['rate_percent'] or 0) if ins['rate_mode']=='custom' else _rate_for_month(mortgage,payment_date[:7])
+        rows=[dict(r) for r in c.execute('SELECT * FROM house_insurance_payments WHERE insurance_id=? AND id<>? ORDER BY payment_date,id',(int(ins['id']),int(exclude_id or 0))).fetchall()]
+    prior=[r for r in rows if str(r['payment_date'])[:10]<pd]
+    bal=float(ins['financed_amount'] or ins['amount'] or 0)-sum(float(r['principal'] or 0) for r in prior)
+    start=str(ins['financed_start_date'] or ins['due_date'] or pd)[:10]
+    prev=max([str(r['payment_date'])[:10] for r in prior] or [start])
+    return max(0.0,round(bal,2)),prev
+
+def _insurance_payment_calc(ins, mortgage, payment_date, amount, principal, interest, exclude_id=0):
+    balance,prev=_insurance_state_before(ins,payment_date,exclude_id)
+    fn=_insurance_rate_fn(dict(ins),mortgage)
+    rate=fn(str(payment_date)[:7])
     amount=float(amount or 0)
     interest=float(interest or 0)
     principal=float(principal or 0)
     if amount<=0: return None
-    if interest<=0: interest=round(balance*rate/100/12,2)
-    if amount < interest: raise ValueError(f'ยอดจ่าย {amount:,.2f} ต่ำกว่าดอกเบี้ยงวดนี้ประมาณ {interest:,.2f}')
+    if interest<=0: interest=accrue_interest(balance,prev,payment_date,fn)
+    if amount < interest: raise ValueError(f'ยอดจ่าย {amount:,.2f} ต่ำกว่าดอกเบี้ยงวดนี้ {interest:,.2f}')
     if principal<=0: principal=round(max(0.0,amount-interest),2)
     principal=min(principal,balance)
-    if principal+0 > balance: principal=balance
     return round(amount,2),round(principal,2),round(interest,2),round(rate,4),round(max(0,balance-principal),2)
+
+def recalc_insurance_payments(user_id, household_id, insurance_id=None):
+    """คำนวณเงินต้น/ดอกเบี้ยของงวดประกัน (แบบผ่อนแยก) ที่บันทึกไว้ใหม่ตามสูตรรายวัน"""
+    if not is_household_admin(user_id, household_id): return None
+    mortgage=get_mortgage(household_id)
+    for ins in get_house_insurance(household_id):
+        if str(ins.get('payment_method'))!='ผ่อนแยก': continue
+        if insurance_id and int(ins['id'])!=int(insurance_id): continue
+        bal=float(ins.get('financed_amount') or ins.get('amount') or 0)
+        prev=str(ins.get('financed_start_date') or ins.get('due_date') or '')[:10]; fn=_insurance_rate_fn(ins,mortgage); upd=[]
+        for p in _ordered(ins['payments']):
+            d=str(p['payment_date'])[:10]; amt=float(p['amount'] or 0)
+            it=accrue_interest(bal,prev or d,d,fn); pr=min(round(max(0.0,amt-it),2),bal)
+            upd.append((pr,it,p['id'])); bal=round(max(0.0,bal-pr),2); prev=d
+        with conn() as c:
+            for pr,it,pid in upd: c.execute('UPDATE house_insurance_payments SET principal=?,interest=? WHERE id=?',(pr,it,pid))
+            c.commit()
+    return get_house_insurance(household_id)
 
 def add_house_insurance_payment(user_id, household_id, data):
     if not user_has_feature(user_id, household_id, 'loan'): return None
@@ -645,23 +739,28 @@ def delete_house_insurance(user_id, household_id, insurance_id):
     return True
 
 def insurance_forecast(insurance, mortgage, months=120):
+    """ตารางผ่อนประกัน: งวดที่จ่ายจริงใช้ค่าที่บันทึก งวดถัดไปคิดดอกเบี้ยรายวันจากยอดคงเหลือจริง"""
     if not insurance or str(insurance.get('payment_method'))!='ผ่อนแยก': return []
     balance=float(insurance.get('financed_amount') or insurance.get('amount') or 0)
     payment=float(insurance.get('financed_monthly_payment') or 0)
     n=int(insurance.get('financed_installments') or 0)
     if balance<=0 or n<=0: return []
-    start=insurance.get('financed_start_date') or insurance.get('due_date') or datetime.now(TZ).date().isoformat()
-    sy,sm=int(start[:4]),int(start[5:7]); rows=[]
-    for i in range(1,min(months,n)+1):
-        idx=(sm-1)+(i-1); year=sy+idx//12; month=(idx%12)+1; date=f'{year:04d}-{month:02d}-01'; ym=date[:7]
-        rate=float(insurance.get('rate_percent') or 0) if insurance.get('rate_mode')=='custom' else _rate_for_month(mortgage,ym)
-        interest=round(balance*rate/100/12,2)
-        if payment<=0:
-            payment=max(interest, round(balance/(n-i+1)+interest,2))
-        pay=round(min(payment,balance+interest),2); principal=round(max(0,min(pay-interest,balance)),2); end=round(balance-principal,2)
-        rows.append({'no':i,'date':date,'rate':rate,'payment':pay,'interest':interest,'principal':principal,'balance':end})
-        balance=end
-        if balance<=0: break
+    start=str(insurance.get('financed_start_date') or insurance.get('due_date') or datetime.now(TZ).date().isoformat())[:10]
+    day=int(insurance.get('financed_payment_day') or 31); fn=_insurance_rate_fn(insurance,mortgage)
+    rows=[]; prev=start; no=0
+    for p in _ordered(insurance.get('payments') or []):
+        no+=1; d=str(p['payment_date'])[:10]; pr=float(p.get('principal') or 0); it=float(p.get('interest') or 0)
+        balance=round(max(0.0,balance-pr),2)
+        rows.append({'no':no,'date':d,'rate':fn(d[:7]),'payment':float(p.get('amount') or 0),'interest':it,'principal':pr,'balance':balance,'actual':True}); prev=d
+    due=_next_due(prev,day)
+    while balance>0 and no<n and no<months:
+        no+=1; ds=due.isoformat(); rate=fn(ds[:7])
+        interest=accrue_interest(balance,prev,ds,fn)
+        pay=payment if payment>0 else max(interest,round(balance/(n-no+1)+interest,2))
+        if no==n: pay=round(balance+interest,2)
+        pay=round(min(pay,balance+interest),2); principal=round(max(0,min(pay-interest,balance)),2); end=round(balance-principal,2)
+        rows.append({'no':no,'date':ds,'rate':rate,'payment':pay,'interest':interest,'principal':principal,'balance':end})
+        balance=end; prev=ds; due=_next_due(prev,day)
     return rows
 
 def get_house_expenses(household_id, month=None):
@@ -677,19 +776,23 @@ def add_house_expense(user_id, household_id, data):
         return dict(c.execute('SELECT * FROM house_expenses WHERE id=?',(cur.lastrowid,)).fetchone())
 
 def mortgage_forecast(mortgage, months=360):
+    """ตารางผ่อนบ้าน: งวดที่จ่ายจริงใช้ค่าที่บันทึก (actual=True) งวดต่อไปคิดดอกเบี้ยรายวันจากยอดคงเหลือจริง"""
     if not mortgage: return []
-    balance=float(mortgage.get('loan_amount') or 0); payment=float(mortgage.get('monthly_payment') or 0); start=mortgage.get('start_date') or datetime.now(TZ).date().isoformat(); rates=mortgage.get('rates') or []
-    rows=[]
-    sy, sm = int(start[:4]), int(start[5:7])
-    for i in range(1,months+1):
-        idx=(sm-1)+(i-1); year=sy+idx//12; month=(idx%12)+1; date=f'{year:04d}-{month:02d}-01'; ym=date[:7]
-        rr=next((r for r in reversed(rates) if (r.get('start_date') or '')[:7] <= ym and (not r.get('end_date') or ym <= (r.get('end_date') or '')[:7])), None)
-        if rr and rr.get('rate_type')=='mrr': rate=float(mortgage.get('current_mrr') or 0)+float(rr.get('mrr_offset') or 0)
-        else: rate=float(rr.get('rate_percent') if rr else 0)
-        interest=round(balance*rate/100/12,2); principal=round(max(0,min(payment-interest,balance)),2); end=round(balance-principal,2)
-        rows.append({'no':i,'date':date,'rate':rate,'payment':round(min(payment,balance+interest),2),'interest':interest,'principal':principal,'balance':end})
-        balance=end
-        if balance<=0: break
+    balance=float(mortgage.get('loan_amount') or 0); payment=float(mortgage.get('monthly_payment') or 0)
+    start=str(mortgage.get('start_date') or datetime.now(TZ).date().isoformat())[:10]
+    day=int(mortgage.get('payment_day') or 31); fn=_mortgage_rate_fn(mortgage)
+    rows=[]; prev=start; no=0
+    for p in _ordered(mortgage.get('payments') or []):
+        no+=1; d=str(p['payment_date'])[:10]; pr=float(p.get('principal') or 0); ex=float(p.get('extra_principal') or 0)
+        balance=round(max(0.0,balance-pr-ex),2)
+        rows.append({'no':no,'date':d,'rate':fn(d[:7]),'payment':float(p.get('amount') or 0),'principal':pr,'extra_principal':ex,'interest':float(p.get('interest') or 0),'balance':balance,'actual':True}); prev=d
+    due=_next_due(prev,day)
+    while balance>0 and no<months:
+        no+=1; ds=due.isoformat()
+        interest=accrue_interest(balance,prev,ds,fn)
+        pay=round(min(payment,balance+interest),2); principal=round(max(0,min(pay-interest,balance)),2); end=round(balance-principal,2)
+        rows.append({'no':no,'date':ds,'rate':fn(ds[:7]),'payment':pay,'interest':interest,'principal':principal,'balance':end})
+        balance=end; prev=ds; due=_next_due(prev,day)
     return rows
 
 

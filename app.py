@@ -11,7 +11,7 @@ from database import (init_db, upsert_user, create_household, join_household, ge
                       get_categories, delete_transaction, set_display_name, get_household, get_settlement,
                       rename_household, delete_household, leave_household, is_household_admin,
                       get_member_permissions, set_member_features, set_member_role, user_has_feature, get_all_user_ids, get_mortgage, is_super_admin, get_global_feature_permissions, set_global_feature, is_super_admin, get_global_feature_permissions, set_global_feature, global_user_has_feature, save_mortgage, add_mortgage_payment, mortgage_forecast, get_house_insurance,
-    insurance_forecast, add_house_insurance_payment, delete_house_insurance, add_house_insurance, get_house_expenses, add_house_expense, get_installments, add_installment, add_installment_payment, update_mortgage_payment, delete_mortgage_payment, update_house_insurance_payment, delete_house_insurance_payment)
+    insurance_forecast, add_house_insurance_payment, delete_house_insurance, add_house_insurance, get_house_expenses, add_house_expense, get_installments, add_installment, add_installment_payment, update_mortgage_payment, delete_mortgage_payment, recalc_mortgage_payments, recalc_insurance_payments, update_house_insurance_payment, delete_house_insurance_payment)
 from ai import parse_text, parse_slip
 from split_utils import parse_split_instruction
 from chat_actions import handle_house_chat
@@ -273,34 +273,7 @@ def api_loan(user_id: str, household_id: int):
     m=get_mortgage(household_id)
     ins=get_house_insurance(household_id)
     exp=get_house_expenses(household_id)
-    forecast=mortgage_forecast(m, int((m or {}).get('term_years') or 30)*12) if m else []
-    # Overlay recorded real payments on the forecast so the UI reflects actual payments.
-    if m and forecast and m.get('payments'):
-        running=float(m.get('loan_amount') or 0)
-        for i, p in enumerate(m.get('payments', [])):
-            if i >= len(forecast): break
-            principal=float(p.get('principal') or 0)
-            extra=float(p.get('extra_principal') or 0)
-            interest=float(p.get('interest') or 0)
-            paid=float(p.get('amount') or 0)
-            running=max(0.0, running-principal-extra)
-            forecast[i] = {**forecast[i], 'date': p.get('payment_date') or forecast[i].get('date'), 'payment': paid, 'principal': principal, 'extra_principal': extra, 'interest': interest, 'balance': round(running,2), 'actual': True}
-        # Recalculate future forecast from the actual current balance.
-        last_actual=len(m.get('payments', []))
-        if last_actual < len(forecast):
-            next_start=m.get('start_date')
-            if last_actual:
-                d=str(forecast[last_actual-1].get('date') or '')
-                try:
-                    y,mo=int(d[:4]),int(d[5:7]); y,mo=(y+1,1) if mo==12 else (y,mo+1)
-                    next_start=f'{y:04d}-{mo:02d}-01'
-                except ValueError:
-                    pass
-            future=mortgage_forecast({**m,'loan_amount':running,'start_date':next_start}, len(forecast)-last_actual)
-            for j,row in enumerate(future):
-                row['no']=last_actual+j+1
-                forecast[last_actual+j]=row
-            forecast=forecast[:last_actual+len(future)]
+    forecast=mortgage_forecast(m, int((m or {}).get('term_years') or 30)*12+len((m or {}).get('payments') or [])) if m else []
     paid_principal=sum(float(x.get('principal') or 0) + float(x.get('extra_principal') or 0) for x in (m or {}).get('payments',[]))
     paid_interest=sum(float(x.get('interest') or 0) for x in (m or {}).get('payments',[]))
     actual_balance=max(0, float((m or {}).get('loan_amount') or 0)-paid_principal)
@@ -309,6 +282,13 @@ def api_loan(user_id: str, household_id: int):
         if str(x.get('payment_method'))=='ผ่อนแยก':
             insurance_forecasts[str(x['id'])]=insurance_forecast(x,m,int(x.get('financed_installments') or 120))
     return {'mortgage':m,'forecast':forecast,'insurance':ins,'insurance_forecasts':insurance_forecasts,'expenses':exp,'paid_principal':round(paid_principal,2),'paid_interest':round(paid_interest,2),'actual_balance':round(actual_balance,2)}
+
+@app.post('/api/loan/recalc')
+async def api_loan_recalc(request: Request):
+    payload=await request.json(); user_id=str(payload.get('user_id') or '').strip(); hid=int(payload.get('household_id') or 0)
+    if not user_id or not hid or not is_household_admin(user_id,hid): raise HTTPException(status_code=403, detail='เฉพาะแอดมินของบ้าน')
+    recalc_mortgage_payments(user_id,hid); recalc_insurance_payments(user_id,hid)
+    return {'ok':True}
 
 @app.put('/api/loan')
 async def api_save_loan(request: Request):
