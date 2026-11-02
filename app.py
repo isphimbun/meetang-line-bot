@@ -14,6 +14,8 @@ from database import (init_db, upsert_user, create_household, join_household, ge
     insurance_forecast, add_house_insurance_payment, add_house_insurance, get_house_expenses, add_house_expense, get_installments, add_installment, add_installment_payment, update_mortgage_payment, delete_mortgage_payment, update_house_insurance_payment, delete_house_insurance_payment)
 from ai import parse_text, parse_slip
 from split_utils import parse_split_instruction
+from chat_actions import handle_house_chat
+from notify import notify_transaction, notify_installment_payment, notify_loan_payment, notify_house_expense, notify_insurance_payment
 from flex import summary_flex, transaction_flex, recent_flex, settlement_flex, household_flex, help_text
 
 TZ = ZoneInfo(os.getenv('TZ', 'Asia/Bangkok'))
@@ -260,6 +262,7 @@ async def api_add_installment_payment(request: Request):
     if not user_id or not hid or not user_has_feature(user_id,hid,'installment'): raise HTTPException(status_code=403, detail='installment feature disabled')
     row=add_installment_payment(user_id,hid,payload)
     if row is None: raise HTTPException(status_code=400, detail='save failed')
+    notify_installment_payment(hid,user_id,row,payload.get('plan_id'),payload.get('amount'))
     return {'plans':row}
 
 @app.get('/api/loan')
@@ -338,6 +341,7 @@ async def api_loan_payment(request: Request):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     if row is None: raise HTTPException(status_code=400, detail='no mortgage or invalid payment')
+    notify_loan_payment(hid,user_id,row)
     return row
 
 @app.put('/api/loan/payment')
@@ -367,6 +371,7 @@ async def api_loan_insurance_payment(request: Request):
     if not user_id or not hid or not user_has_feature(user_id,hid,'loan'): raise HTTPException(status_code=403, detail='loan feature disabled')
     row=add_house_insurance_payment(user_id,hid,payload)
     if row is None: raise HTTPException(status_code=400, detail='insurance is not a separate installment plan')
+    notify_insurance_payment(hid,user_id,row)
     return row
 
 @app.put('/api/loan/insurance/payment')
@@ -388,6 +393,7 @@ async def api_loan_expense(request: Request):
     if not user_id or not hid or not user_has_feature(user_id,hid,'loan'): raise HTTPException(status_code=403, detail='loan feature disabled')
     row=add_house_expense(user_id,hid,payload)
     if row is None: raise HTTPException(status_code=400, detail='save failed')
+    notify_house_expense(hid,user_id,row)
     return row
 
 @app.get('/api/features/me')
@@ -469,6 +475,9 @@ async def handle_event(event):
             reply(event['replyToken'], [household_flex(hs, active)]); return
         if text.lower() in ('help','ช่วย','เมนู','menu','วิธีใช้'):
             reply(event['replyToken'], [{'type':'text','text':help_message()}]); return
+        house_reply = handle_house_chat(text, user_id)
+        if house_reply is not None:
+            reply(event['replyToken'], [{'type':'text','text':house_reply}]); return
         cmd, arg = find_command(text)
         if cmd and cmd['action'] == 'help':
             reply(event['replyToken'], [{'type':'text','text':help_message()}]); return
@@ -485,6 +494,7 @@ async def handle_event(event):
             if cmd['action']=='income': parsed['category']='เงินออม/ลงทุน' if cmd['name']=='ฝากเงิน' else (parsed.get('category') or 'อื่นๆ')
             if cmd['action']=='expense': parsed['category']='เงินออม/ลงทุน' if cmd['name']=='ถอนเงิน' else (parsed.get('category') or 'อื่นๆ')
             tx=add_transaction(user_id=user_id, household_id=hid, source='command', original_text=text, payer_user_id=user_id, **parsed)
+            notify_transaction(tx, user_id)
             payer_name=next((m.get('display_name') for m in (h or {}).get('members',[]) if m['user_id']==user_id), None)
             reply(event['replyToken'], [transaction_flex(tx,h,payer_name)]); return
         if cmd and cmd['action'] == 'delete_latest' and not arg:
@@ -578,6 +588,7 @@ async def handle_event(event):
             split_mode, participants, split_amounts, _ = split
         tx=add_transaction(user_id=user_id, household_id=hid, source='text', original_text=text, payer_user_id=user_id,
                            split_mode=split_mode, split_participants=participants, split_amounts=split_amounts, **parsed)
+        notify_transaction(tx, user_id)
         payer_name=next((m.get('display_name') for m in (h or {}).get('members',[]) if m['user_id']==user_id), None)
         reply(event['replyToken'], [transaction_flex(tx,h,payer_name)]); return
 
@@ -589,6 +600,7 @@ async def handle_event(event):
             split_mode, participants, split_amounts, _ = split
         tx=add_transaction(user_id=user_id, household_id=hid, source='slip', original_text='LINE image', payer_user_id=user_id,
                            split_mode=split_mode, split_participants=participants, split_amounts=split_amounts, **parsed)
+        notify_transaction(tx, user_id)
         payer_name=next((m.get('display_name') for m in (h or {}).get('members',[]) if m['user_id']==user_id), None)
         reply(event['replyToken'], [transaction_flex(tx,h,payer_name)]); return
 
