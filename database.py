@@ -2,7 +2,8 @@ import os, secrets, json, re
 import psycopg2
 from psycopg2 import IntegrityError
 from psycopg2.extras import DictCursor
-from datetime import datetime
+from datetime import datetime, date, time
+from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 DB_PATH = os.getenv('DATABASE_PATH', 'moneymate.db')
@@ -40,11 +41,27 @@ class PGCursor:
     def rowcount(self):
         return self._cur.rowcount
 
+    @staticmethod
+    def _norm(row):
+        """Make PostgreSQL values look like the SQLite values the rest of the code expects.
+        DATE/TIMESTAMP -> ISO string, NUMERIC -> float. Without this, code such as
+        start_date[:7] or float math on Decimal crashes when Supabase columns are typed."""
+        if row is None:
+            return row
+        for i, v in enumerate(row):
+            if isinstance(v, datetime):
+                row[i] = v.isoformat(timespec='seconds')
+            elif isinstance(v, (date, time)):
+                row[i] = v.isoformat()
+            elif isinstance(v, Decimal):
+                row[i] = float(v)
+        return row
+
     def fetchone(self):
-        return self._cur.fetchone()
+        return self._norm(self._cur.fetchone())
 
     def fetchall(self):
-        return self._cur.fetchall()
+        return [self._norm(r) for r in self._cur.fetchall()]
 
     def execute(self, sql, params=None):
         sql = sql.replace('?', '%s')
@@ -65,8 +82,8 @@ class PGCursor:
             sql += ' ON CONFLICT DO NOTHING'
 
         # PostgreSQL needs RETURNING id instead of SQLite's cursor.lastrowid.
-        if re.match(r'^INSERT\s+INTO\s+([a-z_]+)', sql, flags=re.I):
-            table_match = re.match(r'^INSERT\s+INTO\s+([a-z_]+)', sql, flags=re.I)
+        if re.match(r'^\s*INSERT\s+INTO\s+([a-z_]+)', sql, flags=re.I):
+            table_match = re.match(r'^\s*INSERT\s+INTO\s+([a-z_]+)', sql, flags=re.I)
             table = table_match.group(1).lower() if table_match else ''
             if table in self.ID_TABLES and 'RETURNING' not in sql.upper():
                 sql += ' RETURNING id'
@@ -79,7 +96,7 @@ class PGCursor:
             self._cur.connection.rollback()
             raise
         self._lastrowid = None
-        if re.match(r'^INSERT\s+INTO\s+([a-z_]+)', sql, flags=re.I) and 'RETURNING id' in sql.upper():
+        if re.match(r'^\s*INSERT\s+INTO\s+([a-z_]+)', sql, flags=re.I) and 'RETURNING ID' in sql.upper():
             row = self._cur.fetchone()
             if row:
                 self._lastrowid = row['id'] if isinstance(row, dict) else row[0]
@@ -128,7 +145,7 @@ def conn():
     database_url = os.getenv('DATABASE_URL', '').strip()
     if not database_url:
         raise RuntimeError('DATABASE_URL is not configured. Add your Supabase PostgreSQL connection string to Render Environment Variables.')
-    raw = psycopg2.connect(database_url, cursor_factory=DictCursor, connect_timeout=15, sslmode='require')
+    raw = psycopg2.connect(database_url, cursor_factory=DictCursor, connect_timeout=15, sslmode=os.getenv('PGSSLMODE', 'require'))
     return PGConnection(raw)
 
 
@@ -309,7 +326,7 @@ def _scope(user_id=None, household_id=None):
 
 def get_summary(month=None, user_id=None, household_id=None):
     month = month or datetime.now(TZ).strftime('%Y-%m'); scope, params = _scope(user_id, household_id)
-    where = f'substr(occurred_at,1,7)=? AND {scope}'; qparams = [month] + params
+    where = f'substr(CAST(occurred_at AS TEXT),1,7)=? AND {scope}'; qparams = [month] + params
     with conn() as c:
         total = c.execute(f'SELECT type,COALESCE(SUM(amount),0) total FROM transactions WHERE {where} GROUP BY type', qparams).fetchall()
         cats = c.execute(f"SELECT category,type,COALESCE(SUM(amount),0) total,COUNT(*) count FROM transactions WHERE {where} AND type='expense' GROUP BY category,type ORDER BY total DESC", qparams).fetchall()
@@ -328,7 +345,7 @@ def get_recent(limit=20, user_id=None, household_id=None):
 
 def get_all_user_ids():
     with conn() as c:
-        rows = c.execute('SELECT user_id FROM users WHERE user_id IS NOT NULL AND user_id <> ''').fetchall()
+        rows = c.execute("SELECT user_id FROM users WHERE user_id IS NOT NULL AND user_id <> ''").fetchall()
     return [r['user_id'] for r in rows]
 
 
@@ -434,6 +451,18 @@ def get_mortgage(household_id):
         payments = c.execute('SELECT * FROM mortgage_payments WHERE mortgage_id=? ORDER BY payment_date,id', (m['id'],)).fetchall()
     return {**dict(m), 'rates':[dict(r) for r in rates], 'payments':[dict(x) for x in payments]}
 
+def _blank(v):
+    """'' from HTML inputs must become NULL, otherwise PostgreSQL DATE/NUMERIC columns reject it."""
+    if v is None: return None
+    if isinstance(v, str) and not v.strip(): return None
+    return v
+
+def _num(v, default=None):
+    v = _blank(v)
+    if v is None: return default
+    try: return float(v)
+    except (TypeError, ValueError): return default
+
 def calc_monthly_payment(principal, annual_rate, months):
     principal=float(principal or 0); annual_rate=float(annual_rate or 0); months=int(months or 0)
     if principal<=0 or months<=0: return 0.0
@@ -445,7 +474,7 @@ def save_mortgage(user_id, household_id, data):
     if not user_has_feature(user_id, household_id, 'loan'): return None
     now=datetime.now(TZ).isoformat(timespec='seconds')
     fields=('property_name','purchase_price','loan_amount','start_date','term_years','monthly_payment','bank','contract_no','payment_day','current_mrr')
-    vals=[data.get(k) for k in fields]
+    vals=[_blank(data.get(k)) for k in fields]
     # If the user leaves the monthly payment blank, estimate it from the first rate and term.
     try:
         if not float(vals[5] or 0):
@@ -466,7 +495,7 @@ def save_mortgage(user_id, household_id, data):
         else:
             cur=c.execute('INSERT INTO mortgages(household_id,property_name,purchase_price,loan_amount,start_date,term_years,monthly_payment,bank,contract_no,payment_day,current_mrr,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',(household_id,*vals,now,now)); mid=cur.lastrowid
         for r in data.get('rates',[]):
-            c.execute('INSERT INTO mortgage_rates(mortgage_id,start_date,end_date,rate_percent,rate_type,mrr_offset,label) VALUES(?,?,?,?,?,?,?)',(mid,r.get('start_date'),r.get('end_date'),float(r.get('rate_percent') or 0),r.get('rate_type','fixed'),r.get('mrr_offset'),r.get('label','')))
+            c.execute('INSERT INTO mortgage_rates(mortgage_id,start_date,end_date,rate_percent,rate_type,mrr_offset,label) VALUES(?,?,?,?,?,?,?)',(mid,_blank(r.get('start_date')),_blank(r.get('end_date')),_num(r.get('rate_percent'),0.0),r.get('rate_type') or 'fixed',_num(r.get('mrr_offset')),r.get('label') or ''))
         c.commit()
     return get_mortgage(household_id)
 
@@ -538,7 +567,7 @@ def save_house_insurance(user_id, household_id, data):
     if not is_household_admin(user_id, household_id): return None
     now=datetime.now(TZ).isoformat(timespec='seconds')
     fields=('insurance_type','provider','amount','payment_cycle','due_date','status','note','payment_method','financed_amount','financed_installments','financed_monthly_payment','financed_start_date','financed_payment_day','rate_mode','rate_percent')
-    vals=[data.get(k) for k in fields]
+    vals=[_blank(data.get(k)) for k in fields]
     vals[2]=float(vals[2] or 0); vals[8]=float(vals[8] or 0); vals[9]=int(vals[9] or 0); vals[10]=float(vals[10] or 0); vals[12]=int(vals[12] or 31); vals[14]=float(vals[14] or 0)
     with conn() as c:
         iid=int(data.get('id') or 0)
@@ -625,7 +654,7 @@ def insurance_forecast(insurance, mortgage, months=120):
 
 def get_house_expenses(household_id, month=None):
     with conn() as c:
-        if month: rows=c.execute('SELECT * FROM house_expenses WHERE household_id=? AND substr(expense_date,1,7)=? ORDER BY expense_date DESC,id DESC',(household_id,month)).fetchall()
+        if month: rows=c.execute('SELECT * FROM house_expenses WHERE household_id=? AND substr(CAST(expense_date AS TEXT),1,7)=? ORDER BY expense_date DESC,id DESC',(household_id,month)).fetchall()
         else: rows=c.execute('SELECT * FROM house_expenses WHERE household_id=? ORDER BY expense_date DESC,id DESC LIMIT 100',(household_id,)).fetchall()
     return [dict(r) for r in rows]
 
@@ -665,7 +694,7 @@ def add_installment(user_id, household_id, data):
     if not is_household_admin(user_id, household_id): return None
     now=datetime.now(TZ).isoformat(timespec='seconds')
     with conn() as c:
-        cur=c.execute('INSERT INTO installment_plans(household_id,name,category,total_price,down_payment,financed_amount,total_installments,monthly_payment,start_date,interest_rate,provider,due_day,status,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(household_id,data.get('name','รายการผ่อน'),data.get('category',''),float(data.get('total_price') or 0),float(data.get('down_payment') or 0),float(data.get('financed_amount') or 0),int(data.get('total_installments') or 0),float(data.get('monthly_payment') or 0),data.get('start_date'),float(data.get('interest_rate') or 0),data.get('provider',''),int(data.get('due_day') or 1),data.get('status','กำลังผ่อน'),now)); c.commit(); return get_installments(household_id)
+        cur=c.execute('INSERT INTO installment_plans(household_id,name,category,total_price,down_payment,financed_amount,total_installments,monthly_payment,start_date,interest_rate,provider,due_day,status,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(household_id,data.get('name','รายการผ่อน'),data.get('category',''),float(data.get('total_price') or 0),float(data.get('down_payment') or 0),float(data.get('financed_amount') or 0),int(data.get('total_installments') or 0),float(data.get('monthly_payment') or 0),_blank(data.get('start_date')),float(data.get('interest_rate') or 0),data.get('provider',''),int(data.get('due_day') or 1),data.get('status','กำลังผ่อน'),now)); c.commit(); return get_installments(household_id)
 
 def add_installment_payment(user_id, household_id, data):
     if not user_has_feature(user_id, household_id, 'installment'): return None
@@ -691,7 +720,7 @@ def get_settlement(household_id, month=None):
     members = {m['user_id']: (m['display_name'] or f'สมาชิก {m["user_id"][-4:]}') for m in h['members']}
     paid = {u: 0.0 for u in members}; owed = {u: 0.0 for u in members}
     with conn() as c:
-        rows = c.execute("SELECT * FROM transactions WHERE household_id=? AND type='expense' AND substr(occurred_at,1,7)=?", (household_id, month)).fetchall()
+        rows = c.execute("SELECT * FROM transactions WHERE household_id=? AND type='expense' AND substr(CAST(occurred_at AS TEXT),1,7)=?", (household_id, month)).fetchall()
     for r in rows:
         payer = r['payer_user_id'] or r['user_id']; paid[payer] = paid.get(payer, 0) + float(r['amount'])
         try: amounts = json.loads(r['split_amounts'] or '{}')
@@ -714,7 +743,7 @@ def get_settlement(household_id, month=None):
 def get_commands(enabled_only=False):
     with conn() as c:
         q = 'SELECT * FROM bot_commands'
-        if enabled_only: q += ' WHERE enabled=1'
+        if enabled_only: q += " WHERE CAST(enabled AS TEXT) IN ('1','true','t')"
         rows = c.execute(q + ' ORDER BY id').fetchall()
     return [dict(r) for r in rows]
 
@@ -725,7 +754,7 @@ def add_command(name, aliases, action='custom', description='', enabled=True):
     now=datetime.now(TZ).isoformat(timespec='seconds')
     with conn() as c:
         cur=c.execute('INSERT INTO bot_commands(name,aliases,action,description,enabled,created_at,updated_at) VALUES(?,?,?,?,?,?,?)',
-                      (name,aliases,action,(description or '').strip()[:200],1 if enabled else 0,now,now))
+                      (name,aliases,action,(description or '').strip()[:200],bool(enabled),now,now))
         row=c.execute('SELECT * FROM bot_commands WHERE id=?',(cur.lastrowid,)).fetchone(); c.commit(); return dict(row)
 
 
@@ -733,7 +762,7 @@ def update_command(command_id, name, aliases, action='custom', description='', e
     now=datetime.now(TZ).isoformat(timespec='seconds')
     with conn() as c:
         c.execute('UPDATE bot_commands SET name=?,aliases=?,action=?,description=?,enabled=?,updated_at=? WHERE id=?',
-                  ((name or '').strip()[:80],(aliases or '').strip()[:300],action,(description or '').strip()[:200],1 if enabled else 0,now,command_id))
+                  ((name or '').strip()[:80],(aliases or '').strip()[:300],action,(description or '').strip()[:200],bool(enabled),now,command_id))
         row=c.execute('SELECT * FROM bot_commands WHERE id=?',(command_id,)).fetchone(); c.commit(); return dict(row) if row else None
 
 

@@ -80,3 +80,12 @@ Dashboard opens DASHBOARD_URL (default: https://meetang-bot.onrender.com).
 
 ## v31 Rich Menu Image Fix
 LINE Rich Menu images must be <= 1 MB. The approved artwork is compressed to JPEG (517,622 bytes, quality 88) and the uploader uses image/jpeg.
+
+## v34 fix
+- แก้ INSERT ไม่คืนค่า id (ตรวจ `RETURNING id` ผิดตัวพิมพ์) ทำให้บันทึกรายการ/สร้างบ้าน/บันทึกสินเชื่อใหม่ล้มเหลว
+- แก้ `enabled=1` กับคอลัมน์ boolean ใน bot_commands ทำให้บอทไม่ตอบข้อความ
+- แก้ SQL ผิดใน get_all_user_ids
+- แปลงค่า DATE/NUMERIC จาก PostgreSQL เป็น string/float (กัน `/api/loan` พัง)
+- ช่องวันที่/ตัวเลขที่เว้นว่างบันทึกเป็น NULL
+- Rich Menu ตั้งค่าแบบ background ไม่บล็อกการเปิดเซิร์ฟเวอร์
+- ตารางประมาณการหลังงวดจริงเริ่มเดือนถัดไป (เดิมซ้ำเดือน)

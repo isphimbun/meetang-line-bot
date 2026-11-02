@@ -107,7 +107,10 @@ def setup_rich_menu_on_startup():
 
 @app.on_event('startup')
 async def startup_tasks():
-    setup_rich_menu_on_startup()
+    # Run in the background so a slow LINE API call never blocks the server from starting
+    # (Render marks the deploy as failed if the port is not opened in time).
+    import threading
+    threading.Thread(target=setup_rich_menu_on_startup, daemon=True).start()
 
 
 def verify_signature(body: bytes, signature: str) -> bool:
@@ -281,10 +284,19 @@ def api_loan(user_id: str, household_id: int):
         # Recalculate future forecast from the actual current balance.
         last_actual=len(m.get('payments', []))
         if last_actual < len(forecast):
-            future=mortgage_forecast({**m,'loan_amount':running,'start_date':forecast[last_actual-1].get('date') if last_actual else m.get('start_date')}, len(forecast)-last_actual)
+            next_start=m.get('start_date')
+            if last_actual:
+                d=str(forecast[last_actual-1].get('date') or '')
+                try:
+                    y,mo=int(d[:4]),int(d[5:7]); y,mo=(y+1,1) if mo==12 else (y,mo+1)
+                    next_start=f'{y:04d}-{mo:02d}-01'
+                except ValueError:
+                    pass
+            future=mortgage_forecast({**m,'loan_amount':running,'start_date':next_start}, len(forecast)-last_actual)
             for j,row in enumerate(future):
                 row['no']=last_actual+j+1
                 forecast[last_actual+j]=row
+            forecast=forecast[:last_actual+len(future)]
     paid_principal=sum(float(x.get('principal') or 0) + float(x.get('extra_principal') or 0) for x in (m or {}).get('payments',[]))
     paid_interest=sum(float(x.get('interest') or 0) for x in (m or {}).get('payments',[]))
     actual_balance=max(0, float((m or {}).get('loan_amount') or 0)-paid_principal)
