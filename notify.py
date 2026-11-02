@@ -10,7 +10,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 import requests
 
-from database import get_household
+from database import get_household, user_has_feature
 
 TZ = ZoneInfo(os.getenv('TZ', 'Asia/Bangkok'))
 _TH_MONTHS = ['ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.']
@@ -85,7 +85,7 @@ def _send(user_ids, messages):
             print('notify error:', repr(e))
 
 
-def _dispatch(household_id, actor_user_id, builder):
+def _dispatch(household_id, actor_user_id, builder, feature=None):
     """หา household + สมาชิกที่ต้องแจ้ง แล้วส่งใน thread แยก"""
     if not _enabled() or not household_id: return
     def run():
@@ -93,6 +93,8 @@ def _dispatch(household_id, actor_user_id, builder):
             h = get_household(int(household_id))
             if not h: return
             targets = [m['user_id'] for m in h.get('members', []) if m['user_id'] != actor_user_id]
+            if feature:  # ข้อมูลบ้าน/สินเชื่อ/ผ่อน ส่งเฉพาะคนที่ได้รับสิทธิ์ฟีเจอร์นั้น
+                targets = [u for u in targets if user_has_feature(u, int(household_id), feature)]
             if not targets: return
             _send(targets, [builder(h)])
         except Exception as e:
@@ -130,7 +132,7 @@ def notify_installment_payment(household_id, actor_user_id, plans, plan_id, amou
             [('รายการ', plan.get('name') or '-'), ('ยอดงวดนี้', _baht(amount)),
              ('จำนวนงวด', f'{paid}/{total}' if total else str(paid))],
             f"แจ้งสมาชิกบ้าน {h['name']}")
-    _dispatch(household_id, actor_user_id, build)
+    _dispatch(household_id, actor_user_id, build, feature='installment')
 
 
 def notify_loan_payment(household_id, actor_user_id, mortgage):
@@ -148,7 +150,7 @@ def notify_loan_payment(household_id, actor_user_id, mortgage):
             f"แจ้งเตือนสินเชื่อบ้าน ชำระ {_baht(last.get('amount'))}",
             '🏡 แจ้งเตือนสินเชื่อบ้าน', 'มีการบันทึกชำระสินเชื่อแล้ว', items,
             f"แจ้งสมาชิกบ้าน {h['name']}")
-    _dispatch(household_id, actor_user_id, build)
+    _dispatch(household_id, actor_user_id, build, feature='loan')
 
 
 def notify_house_expense(household_id, actor_user_id, row):
@@ -163,7 +165,7 @@ def notify_house_expense(household_id, actor_user_id, row):
             f"{h['name']} มีค่าใช้จ่ายบ้านใหม่ {_baht(row.get('amount'))}",
             f"🧾 {h['name']} มีค่าใช้จ่ายบ้านใหม่", 'มีการบันทึกค่าใช้จ่ายบ้านใหม่', items,
             'MeeTang – จัดการเงินบ้านให้ง่ายขึ้น ❤️')
-    _dispatch(household_id, actor_user_id, build)
+    _dispatch(household_id, actor_user_id, build, feature='loan')
 
 
 def notify_insurance_payment(household_id, actor_user_id, insurance):
@@ -182,4 +184,4 @@ def notify_insurance_payment(household_id, actor_user_id, insurance):
         return _bubble(
             f"มีการบันทึกจ่ายประกัน {_baht(last.get('amount'))}",
             '🛡️ มีการบันทึกจ่ายประกันใหม่', None, items, f"แจ้งสมาชิกบ้าน {h['name']}")
-    _dispatch(household_id, actor_user_id, build)
+    _dispatch(household_id, actor_user_id, build, feature='loan')

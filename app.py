@@ -136,8 +136,9 @@ def active_scope(user_id):
     h = get_active_household(user_id)
     return h, (h['id'] if h else None)
 
-def help_message():
-    return help_text()
+def help_message(user_id=None):
+    show = bool(user_id) and (user_has_feature(user_id, None, 'loan') or user_has_feature(user_id, None, 'installment'))
+    return help_text(show_house=show)
 
 @app.get('/')
 def root(): return FileResponse('static/index.html')
@@ -474,13 +475,13 @@ async def handle_event(event):
                 reply(event['replyToken'], [{'type':'text','text':'🏠 ยังไม่มีบ้าน\n\nพิมพ์ “สร้างบ้าน บ้านของเรา” หรือกดปุ่มสร้างบ้านจากเมนูได้เลยครับ'}]); return
             reply(event['replyToken'], [household_flex(hs, active)]); return
         if text.lower() in ('help','ช่วย','เมนู','menu','วิธีใช้'):
-            reply(event['replyToken'], [{'type':'text','text':help_message()}]); return
+            reply(event['replyToken'], [{'type':'text','text':help_message(user_id)}]); return
         house_reply = handle_house_chat(text, user_id)
         if house_reply is not None:
             reply(event['replyToken'], [{'type':'text','text':house_reply}]); return
         cmd, arg = find_command(text)
         if cmd and cmd['action'] == 'help':
-            reply(event['replyToken'], [{'type':'text','text':help_message()}]); return
+            reply(event['replyToken'], [{'type':'text','text':help_message(user_id)}]); return
         if cmd and cmd['action'] == 'summary' and not arg:
             h,hid=active_scope(user_id); reply(event['replyToken'], [summary_flex(get_summary(user_id=user_id, household_id=hid), h)]); return
         if cmd and cmd['action'] == 'recent' and not arg:

@@ -22,7 +22,6 @@ _EXPENSE_TYPES = [  # เรียงจากคำเฉพาะไปคำ�
     (('เน็ต', 'อินเทอร์เน็ต', 'internet', 'wifi', 'ไวไฟ', 'ไฟเบอร์'), '📶 อินเทอร์เน็ต'),
     (('น้ำ',), '💧 ค่าน้ำ'), (('ไฟ',), '⚡ ค่าไฟ'),
 ]
-_NO_FEATURE = 'ฟีเจอร์นี้ยังไม่ได้เปิดสิทธิ์ให้บัญชีของคุณครับ 🔒\nให้ Super Admin เปิดสิทธิ์ให้ก่อน'
 _NO_HOUSE = '🏠 ยังไม่ได้เลือกบ้านครับ\nพิมพ์ “สร้างบ้าน ชื่อบ้าน” หรือ “เข้าร่วม รหัส” ก่อน'
 
 
@@ -147,9 +146,10 @@ def handle_house_chat(text, user_id):
     elif re.match(r'^จ่ายประกัน(?:\s|$)', t): kind, feature, fn = 'insurance', 'loan', _insurance
     elif re.match(r'^ผ่อน(?:\s|$)', t): kind, feature, fn = 'installment', 'installment', _installment
     else: return None
+    # คนที่ไม่มีสิทธิ์: ไม่ตอบอะไรเกี่ยวกับฟีเจอร์นี้ (คืน None → ถูกมองเป็นข้อความธรรมดา) จะได้ไม่รู้ว่ามีฟีเจอร์นี้อยู่
+    if not user_has_feature(user_id, None, feature): return None
     h = get_active_household(user_id)
     if not h: return _NO_HOUSE
-    if not user_has_feature(user_id, h['id'], feature): return _NO_FEATURE
     try:
         return fn(t, user_id, h)
     except Exception as e:
