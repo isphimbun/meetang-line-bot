@@ -11,10 +11,12 @@ from database import (init_db, upsert_user, create_household, join_household, ge
                       get_categories, delete_transaction, set_display_name, get_household, get_settlement,
                       rename_household, delete_household, leave_household, is_household_admin,
                       get_member_permissions, set_member_features, set_member_role, user_has_feature, get_all_user_ids, get_mortgage, is_super_admin, get_global_feature_permissions, set_global_feature, is_super_admin, get_global_feature_permissions, set_global_feature, global_user_has_feature, save_mortgage, add_mortgage_payment, mortgage_forecast, get_house_insurance,
-    insurance_forecast, add_house_insurance_payment, delete_house_insurance, add_house_insurance, get_house_expenses, add_house_expense, get_installments, add_installment, add_installment_payment, update_mortgage_payment, delete_mortgage_payment, recalc_mortgage_payments, recalc_insurance_payments, update_house_insurance_payment, delete_house_insurance_payment)
+    insurance_forecast, add_house_insurance_payment, delete_house_insurance, add_house_insurance, get_house_expenses, add_house_expense, get_installments, add_installment, add_installment_payment, update_mortgage_payment, delete_mortgage_payment, ensure_schema, _mortgage_base, recalc_mortgage_payments, recalc_insurance_payments, update_house_insurance_payment, delete_house_insurance_payment)
 from ai import parse_text, parse_slip
 from split_utils import parse_split_instruction
 from chat_actions import handle_house_chat
+from auth import AuthMiddleware, make_token, verify_token, auth_enabled
+from reminders import start_reminders
 from notify import notify_transaction, notify_installment_payment, notify_loan_payment, notify_house_expense, notify_insurance_payment
 from flex import summary_flex, transaction_flex, recent_flex, settlement_flex, household_flex, help_text
 
@@ -22,7 +24,9 @@ TZ = ZoneInfo(os.getenv('TZ', 'Asia/Bangkok'))
 LINE_CHANNEL_SECRET = os.getenv('LINE_CHANNEL_SECRET', '')
 LINE_ACCESS_TOKEN = os.getenv('LINE_ACCESS_TOKEN', '') or os.getenv('LINE_CHANNEL_ACCESS_TOKEN', '')
 app = FastAPI(title='MeeTang LINE Bot')
+app.add_middleware(AuthMiddleware)
 init_db()
+ensure_schema()
 
 
 def setup_rich_menu_on_startup():
@@ -113,6 +117,9 @@ async def startup_tasks():
     # (Render marks the deploy as failed if the port is not opened in time).
     import threading
     threading.Thread(target=setup_rich_menu_on_startup, daemon=True).start()
+    start_reminders()
+    if not auth_enabled():
+        print('⚠️ Dashboard auth is OFF (set DASH_SECRET or LINE_CHANNEL_SECRET, and keep DASH_AUTH=1)')
 
 
 def verify_signature(body: bytes, signature: str) -> bool:
@@ -139,6 +146,27 @@ def active_scope(user_id):
 def help_message(user_id=None):
     show = bool(user_id) and (user_has_feature(user_id, None, 'loan') or user_has_feature(user_id, None, 'installment'))
     return help_text(show_house=show)
+
+DASHBOARD_URL = os.getenv('DASHBOARD_URL', 'https://meetang-bot.onrender.com').rstrip('/')
+
+def dashboard_link_message(user_id):
+    url = DASHBOARD_URL + ('/?t=' + make_token(user_id, 'login') if auth_enabled() else '')
+    return {'type': 'flex', 'altText': 'ลิงก์เข้า Dashboard MeeTang', 'contents': {
+        'type': 'bubble', 'size': 'kilo', 'body': {'type': 'box', 'layout': 'vertical', 'spacing': 'md', 'paddingAll': '16px', 'contents': [
+            {'type': 'text', 'text': '🐰 เข้า Dashboard MeeTang', 'weight': 'bold', 'size': 'md', 'wrap': True},
+            {'type': 'text', 'text': 'กดปุ่มด้านล่างเพื่อเข้าสู่ระบบ (ลิงก์ใช้ได้ 10 นาที และผูกกับบัญชี LINE ของคุณ อย่าส่งต่อให้ใคร)' if auth_enabled() else 'เปิด Dashboard', 'size': 'sm', 'color': '#6b6068', 'wrap': True},
+            {'type': 'button', 'style': 'primary', 'color': '#ff7aa2', 'action': {'type': 'uri', 'label': 'เปิด Dashboard', 'uri': url}}]}}}
+
+@app.post('/api/auth/exchange')
+async def api_auth_exchange(request: Request):
+    payload = await request.json()
+    uid = verify_token(payload.get('token'), 'login')
+    if not uid: raise HTTPException(status_code=401, detail='ลิงก์หมดอายุหรือไม่ถูกต้อง — พิมพ์ “เปิดแดชบอร์ด” ใน LINE เพื่อรับลิงก์ใหม่')
+    return {'session': make_token(uid, 'session'), 'user_id': uid}
+
+@app.get('/api/auth/status')
+def api_auth_status(user_id: str):
+    return {'ok': True, 'user_id': user_id}
 
 @app.get('/')
 def root(): return FileResponse('static/index.html')
@@ -267,28 +295,58 @@ async def api_add_installment_payment(request: Request):
     return {'plans':row}
 
 @app.get('/api/loan')
-def api_loan(user_id: str, household_id: int):
+def api_loan(user_id: str, household_id: int, extra_monthly: float | None = None):
     if not user_has_feature(user_id, household_id, 'loan'):
         raise HTTPException(status_code=403, detail='loan feature disabled')
     m=get_mortgage(household_id)
     ins=get_house_insurance(household_id)
     exp=get_house_expenses(household_id)
-    forecast=mortgage_forecast(m, int((m or {}).get('term_years') or 30)*12+len((m or {}).get('payments') or [])) if m else []
-    paid_principal=sum(float(x.get('principal') or 0) + float(x.get('extra_principal') or 0) for x in (m or {}).get('payments',[]))
-    paid_interest=sum(float(x.get('interest') or 0) for x in (m or {}).get('payments',[]))
-    actual_balance=max(0, float((m or {}).get('loan_amount') or 0)-paid_principal)
+    months=int((m or {}).get('term_years') or 30)*12+len((m or {}).get('payments') or [])
+    forecast=mortgage_forecast(m, months) if m else []
+    base_bal,base_date,has_open=_mortgage_base(m) if m else (0.0,'',False)
+    pays=[x for x in (m or {}).get('payments',[]) if not has_open or str(x.get('payment_date'))[:10]>base_date]
+    paid_principal=sum(float(x.get('principal') or 0) + float(x.get('extra_principal') or 0) for x in pays)
+    paid_interest=sum(float(x.get('interest') or 0) for x in pays)
+    actual_balance=max(0, base_bal-paid_principal)
     insurance_forecasts={}
     for x in ins:
         if str(x.get('payment_method'))=='ผ่อนแยก':
             insurance_forecasts[str(x['id'])]=insurance_forecast(x,m,int(x.get('financed_installments') or 120))
-    return {'mortgage':m,'forecast':forecast,'insurance':ins,'insurance_forecasts':insurance_forecasts,'expenses':exp,'paid_principal':round(paid_principal,2),'paid_interest':round(paid_interest,2),'actual_balance':round(actual_balance,2)}
+    warnings=[]
+    if m and not (m.get('rates') or []): warnings.append('ยังไม่ได้ตั้งตารางดอกเบี้ย ระบบจึงคิดดอกเบี้ย 0% — กด ✏️ แก้ข้อมูลกู้ แล้วใส่อัตราดอกเบี้ย')
+    if any(r.get('stalled') for r in forecast if not r.get('actual')):
+        warnings.append(f"ค่างวดที่ตั้งไว้ ({float(m.get('monthly_payment') or 0):,.0f} บาท) ไม่พอจ่ายดอกเบี้ยรายเดือน เงินต้นจึงไม่ลดในตารางประมาณการ — ตรวจค่างวดหรืออัตราดอกเบี้ย")
+    simulation=None
+    if m and extra_monthly and extra_monthly>0:
+        sim=mortgage_forecast(m, months, extra_monthly)
+        fut=[r for r in forecast if not r.get('actual')]; sfut=[r for r in sim if not r.get('actual')]
+        bi=sum(r['interest'] for r in fut); si=sum(r['interest'] for r in sfut)
+        simulation={'extra_monthly':extra_monthly,'base_months':len(fut),'sim_months':len(sfut),'months_saved':len(fut)-len(sfut),
+                    'base_interest':round(bi,2),'sim_interest':round(si,2),'interest_saved':round(bi-si,2),
+                    'base_end':fut[-1]['date'] if fut else None,'sim_end':sfut[-1]['date'] if sfut else None}
+    return {'mortgage':m,'forecast':forecast,'insurance':ins,'insurance_forecasts':insurance_forecasts,'expenses':exp,'paid_principal':round(paid_principal,2),'paid_interest':round(paid_interest,2),'actual_balance':round(actual_balance,2),'warnings':warnings,'simulation':simulation}
+
+@app.get('/api/loan/export')
+def api_loan_export(user_id: str, household_id: int):
+    """ส่งออกตารางผ่อนบ้าน (งวดจริง + ประมาณการ) เป็น CSV เปิดใน Excel ได้ (UTF-8 BOM)"""
+    if not user_has_feature(user_id, household_id, 'loan'):
+        raise HTTPException(status_code=403, detail='loan feature disabled')
+    import csv, io
+    from fastapi.responses import Response
+    m=get_mortgage(household_id)
+    if not m: raise HTTPException(status_code=404, detail='ยังไม่มีข้อมูลสินเชื่อ')
+    buf=io.StringIO(); w=csv.writer(buf)
+    w.writerow(['งวด','วันที่','สถานะ','อัตราดอกเบี้ย %','ยอดจ่าย','ดอกเบี้ย','เงินต้น','โปะ','เงินต้นคงเหลือ'])
+    for r in mortgage_forecast(m, int(m.get('term_years') or 30)*12+len(m.get('payments') or [])):
+        w.writerow([r['no'],r['date'],'จ่ายแล้ว' if r.get('actual') else 'ประมาณการ',r.get('rate',''),r['payment'],r['interest'],r['principal'],r.get('extra_principal',0),r['balance']])
+    return Response('\ufeff'+buf.getvalue(), media_type='text/csv; charset=utf-8', headers={'Content-Disposition':'attachment; filename="meetang-loan.csv"'})
 
 @app.post('/api/loan/recalc')
 async def api_loan_recalc(request: Request):
     payload=await request.json(); user_id=str(payload.get('user_id') or '').strip(); hid=int(payload.get('household_id') or 0)
     if not user_id or not hid or not is_household_admin(user_id,hid): raise HTTPException(status_code=403, detail='เฉพาะแอดมินของบ้าน')
-    recalc_mortgage_payments(user_id,hid); recalc_insurance_payments(user_id,hid)
-    return {'ok':True}
+    a=recalc_mortgage_payments(user_id,hid) or {}; b=recalc_insurance_payments(user_id,hid) or {}
+    return {'ok':True,'mortgage':a,'insurance':b}
 
 @app.put('/api/loan')
 async def api_save_loan(request: Request):
@@ -452,8 +510,10 @@ async def handle_event(event):
     msg = event.get('message', {})
     if msg.get('type') == 'text':
         text = msg.get('text', '').strip()
+        if text.lower() in ('เปิดแดชบอร์ด','แดชบอร์ด','dashboard','ล็อกอิน','login','เข้าเว็บ'):
+            reply(event['replyToken'], [dashboard_link_message(user_id)]); return
         if text in ('รหัสของฉัน','my id','userid'):
-            reply(event['replyToken'], [{'type':'text','text':f'🪪 LINE User ID ของคุณ\n\n{user_id}\n\nใช้รหัสนี้เชื่อม Dashboard MeeTang ได้ครับ'}]); return
+            reply(event['replyToken'], [{'type':'text','text':f'🪪 LINE User ID ของคุณ\n\n{user_id}\n\nรหัสนี้ใช้ตั้งค่า Super Admin เท่านั้น ห้ามส่งให้คนอื่น\nจะเข้า Dashboard ให้พิมพ์ “เปิดแดชบอร์ด” ครับ'}]); return
         if text in ('บ้านของฉัน','จัดการบ้าน','บัญชีของฉัน','บัญชี','household'):
             hs=get_user_households(user_id); active=get_active_household(user_id)
             if not hs:

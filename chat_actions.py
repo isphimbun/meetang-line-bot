@@ -11,7 +11,7 @@ handle_house_chat() คืนข้อความตอบกลับ หร�
 import re
 from database import (get_active_household, user_has_feature, get_mortgage, add_mortgage_payment,
                       add_house_expense, get_installments, add_installment_payment,
-                      get_house_insurance, add_house_insurance_payment)
+                      get_house_insurance, add_house_insurance_payment, _mortgage_base)
 from notify import notify_house_expense, notify_loan_payment, notify_installment_payment, notify_insurance_payment
 
 _NUM = re.compile(r'\d[\d,]*(?:\.\d+)?')
@@ -87,8 +87,10 @@ def _loan_payment(text, user_id, h):
     notify_loan_payment(h['id'], user_id, m)
     last = max(m['payments'], key=lambda x: int(x.get('id') or 0))
     ex = float(last.get('extra_principal') or 0)
-    paid = sum(float(x.get('principal') or 0) + float(x.get('extra_principal') or 0) for x in m['payments'])
-    balance = max(0.0, float(m.get('loan_amount') or 0) - paid)
+    base_bal, base_date, has_open = _mortgage_base(m)
+    paid = sum(float(x.get('principal') or 0) + float(x.get('extra_principal') or 0) for x in m['payments']
+               if not has_open or str(x.get('payment_date'))[:10] > base_date)
+    balance = max(0.0, base_bal - paid)
     lines = ['🏡 บันทึกค่างวดบ้านแล้ว', f'ยอดชำระ {_baht(last["amount"])} บาท',
              f'เงินต้น {_baht(float(last.get("principal") or 0))} · ดอกเบี้ย {_baht(last.get("interest"))}']
     if ex > 0: lines.append(f'โปะ {_baht(ex)} บาท (รวมอยู่ในยอดชำระ)')

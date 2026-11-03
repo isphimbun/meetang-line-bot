@@ -185,3 +185,8 @@ def notify_insurance_payment(household_id, actor_user_id, insurance):
             f"มีการบันทึกจ่ายประกัน {_baht(last.get('amount'))}",
             '🛡️ มีการบันทึกจ่ายประกันใหม่', None, items, f"แจ้งสมาชิกบ้าน {h['name']}")
     _dispatch(household_id, actor_user_id, build, feature='loan')
+
+
+def broadcast(household_id, feature, build):
+    """ส่งหาสมาชิกทุกคนที่มีสิทธิ์ฟีเจอร์นั้น (ไม่มีผู้กระทำ) — ใช้กับการแจ้งเตือนตามเวลา"""
+    _dispatch(household_id, None, build, feature=feature)
