@@ -575,7 +575,15 @@ _OPTIONAL_COLS=[('mortgages','opening_balance','NUMERIC'),('mortgages','opening_
 _COLS=set()
 
 def ensure_schema():
+    """รันตอนเริ่มระบบ: เช็คคอลัมน์ทั้งหมดด้วย query เดียว แล้ว ALTER เฉพาะที่ยังไม่มี (เร็วขึ้นตอน Render ตื่นจากหลับ)"""
+    tables=sorted({t for t,_,_ in _OPTIONAL_COLS}); have=None
+    try:
+        with conn() as c:
+            q=','.join('?' for _ in tables)
+            have={(r[0],r[1]) for r in c.execute(f"SELECT table_name, column_name FROM information_schema.columns WHERE table_schema='public' AND table_name IN ({q})",tables).fetchall()}
+    except Exception as e: print('schema check fallback',repr(e)[:120])
     for t,col,ddl in _OPTIONAL_COLS:
+        if have is not None and (t,col) in have: _COLS.add((t,col)); continue
         try:
             with conn() as c: c.execute(f'ALTER TABLE {t} ADD COLUMN IF NOT EXISTS {col} {ddl}')
         except Exception as e: print('schema skip',t,col,repr(e)[:120])

@@ -28,6 +28,11 @@ def load(path=None):
                 cols=[r[1] for r in raw.execute(f'PRAGMA table_info({m.group(1)})')]
                 if m.group(2) in cols: return raw.execute('SELECT 1')
                 sql=f'ALTER TABLE {m.group(1)} ADD COLUMN {m.group(2)} {m.group(3)}'
+            if 'information_schema.columns' in sql:
+                class R:
+                    def __init__(s,rows): s.rows=rows
+                    def fetchall(s): return s.rows
+                return R([(t,r[1]) for t in params for r in raw.execute(f'PRAGMA table_info({t})')])
             return raw.execute(sql,tuple(params or ()))
         def commit(s): raw.commit()
     db.conn=lambda: C()

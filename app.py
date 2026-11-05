@@ -1,4 +1,4 @@
-import os, json, base64, hashlib, hmac, shutil
+import os, json, base64, hashlib, hmac, shutil, asyncio
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from fastapi import FastAPI, Request, HTTPException
@@ -11,10 +11,11 @@ from database import (init_db, upsert_user, create_household, join_household, ge
                       get_categories, delete_transaction, set_display_name, get_household, get_settlement,
                       rename_household, delete_household, leave_household, is_household_admin,
                       get_member_permissions, set_member_features, set_member_role, user_has_feature, get_all_user_ids, get_mortgage, is_super_admin, get_global_feature_permissions, set_global_feature, is_super_admin, get_global_feature_permissions, set_global_feature, global_user_has_feature, save_mortgage, add_mortgage_payment, mortgage_forecast, get_house_insurance,
-    insurance_forecast, add_house_insurance_payment, delete_house_insurance, add_house_insurance, get_house_expenses, add_house_expense, get_installments, add_installment, add_installment_payment, update_mortgage_payment, delete_mortgage_payment, ensure_schema, _mortgage_base, recalc_mortgage_payments, recalc_insurance_payments, update_house_insurance_payment, delete_house_insurance_payment)
-from ai import parse_text, parse_slip
+    insurance_forecast, add_house_insurance_payment, delete_house_insurance, add_house_insurance, get_house_expenses, add_house_expense, get_installments, add_installment, add_installment_payment, update_mortgage_payment, delete_mortgage_payment, ensure_schema, reminder_seen, reminder_mark, _mortgage_base, recalc_mortgage_payments, recalc_insurance_payments, update_house_insurance_payment, delete_house_insurance_payment)
+from ai import parse_text, parse_slip, slip_enabled
 from split_utils import parse_split_instruction
 from chat_actions import handle_house_chat
+from textutil import normalize_text, is_dashboard_request
 from auth import AuthMiddleware, make_token, verify_token, auth_enabled
 from reminders import start_reminders
 from notify import notify_transaction, notify_installment_payment, notify_loan_payment, notify_house_expense, notify_insurance_payment
@@ -180,7 +181,7 @@ def backup_database():
 def backup_status():
     return {'ok': True, 'database': 'supabase_postgresql', 'database_configured': bool(os.getenv('DATABASE_URL'))}
 
-@app.get('/health')
+@app.api_route('/health', methods=['GET','HEAD'])
 def health(): return {'ok': True, 'service': 'moneymate-line-bot', 'multi_user': True, 'shared_household': True}
 
 @app.get('/api/summary')
@@ -503,14 +504,45 @@ async def webhook(request: Request):
         except Exception as e: print('event error:', repr(e))
     return JSONResponse({'ok': True})
 
+SLIP_DAILY_LIMIT = int(os.getenv('SLIP_DAILY_LIMIT', '30'))
+_slip_count = {}
+
+async def handle_slip(event, user_id, msg):
+    """อ่านสลิปด้วย AI → บันทึกรายจ่าย (กันซ้ำด้วยแฮชรูป, จำกัดจำนวนรูปต่อคนต่อวันเพื่อคุมค่า API)"""
+    tok = event['replyToken']
+    today = datetime.now(TZ).date().isoformat()
+    ck = (today, user_id)
+    if _slip_count.get(ck, 0) >= SLIP_DAILY_LIMIT:
+        reply(tok, [{'type':'text','text':f'วันนี้อ่านสลิปครบ {SLIP_DAILY_LIMIT} รูปแล้วครับ 🙏\nพิมพ์ยอดแทนได้เลย เช่น “350 ร้าน ABC”'}]); return
+    try:
+        content = await asyncio.to_thread(get_line_content, msg['id'])
+    except Exception as e:
+        print('slip download error:', repr(e))
+        reply(tok, [{'type':'text','text':'โหลดรูปไม่สำเร็จครับ ลองส่งใหม่ หรือพิมพ์ยอดแทน เช่น “350 ร้าน ABC”'}]); return
+    h, hid = active_scope(user_id)
+    dedupe = f'slip:{hid or user_id}:{hashlib.sha256(content).hexdigest()[:32]}'
+    if reminder_seen(dedupe):
+        reply(tok, [{'type':'text','text':'🧾 สลิปนี้บันทึกไปแล้วครับ'}]); return
+    _slip_count[ck] = _slip_count.get(ck, 0) + 1
+    parsed = await asyncio.to_thread(parse_slip, content)
+    if not parsed.get('amount'):
+        reply(tok, [{'type':'text','text':'อ่านยอดจากรูปนี้ไม่ได้ครับ 😅\nอาจไม่ใช่สลิป หรือรูปไม่ชัด ลองพิมพ์ยอดแทน เช่น “350 ร้าน ABC”'}]); return
+    reminder_mark(dedupe)
+    tx = add_transaction(user_id=user_id, household_id=hid, source='slip', original_text='LINE image', payer_user_id=user_id,
+                         split_mode='self', split_participants=[user_id], split_amounts=None, **parsed)
+    notify_transaction(tx, user_id)
+    payer_name = next((m.get('display_name') for m in (h or {}).get('members', []) if m['user_id'] == user_id), None)
+    reply(tok, [transaction_flex(tx, h, payer_name),
+                {'type':'text','text':'🧾 อ่านจากสลิปอัตโนมัติ\nถ้ายอดหรือรายการไม่ถูก พิมพ์ “ลบรายการล่าสุด” แล้วบันทึกใหม่ได้ครับ'}])
+
 async def handle_event(event):
     if event.get('type') != 'message' or not event.get('replyToken'): return
     user_id = event.get('source', {}).get('userId', 'unknown')
     upsert_user(user_id)
     msg = event.get('message', {})
     if msg.get('type') == 'text':
-        text = msg.get('text', '').strip()
-        if text.lower() in ('เปิดแดชบอร์ด','แดชบอร์ด','dashboard','ล็อกอิน','login','เข้าเว็บ'):
+        text = normalize_text(msg.get('text', ''))
+        if is_dashboard_request(text):
             reply(event['replyToken'], [dashboard_link_message(user_id)]); return
         if text in ('รหัสของฉัน','my id','userid'):
             reply(event['replyToken'], [{'type':'text','text':f'🪪 LINE User ID ของคุณ\n\n{user_id}\n\nรหัสนี้ใช้ตั้งค่า Super Admin เท่านั้น ห้ามส่งให้คนอื่น\nจะเข้า Dashboard ให้พิมพ์ “เปิดแดชบอร์ด” ครับ'}]); return
@@ -627,7 +659,7 @@ async def handle_event(event):
             reply(event['replyToken'], [{'type':'text','text':'ลบรายการเรียบร้อย 🗑️' if ok else 'ไม่พบรายการนี้ หรือไม่มีสิทธิ์ลบ'}]); return
         parsed=parse_text(text,datetime.now(TZ).date().isoformat())
         if not parsed.get('amount'):
-            reply(event['replyToken'], [{'type':'text','text':'ยังอ่านจำนวนเงินไม่ได้ 😅\nลอง “กินข้าว 120” หรือส่งรูปสลิป'}]); return
+            reply(event['replyToken'], [{'type':'text','text':'ยังอ่านจำนวนเงินไม่ได้ 😅\nลอง “กินข้าว 120” หรือส่งรูปสลิป\n\nจะเข้าเว็บ Dashboard พิมพ์ “เปิดแดชบอร์ด” ได้เลยครับ'}]); return
         split_mode='self'; participants=[user_id]; split_amounts=None
         split=parse_split_instruction(text,h,user_id) if h else None
         if split:
@@ -639,15 +671,8 @@ async def handle_event(event):
         reply(event['replyToken'], [transaction_flex(tx,h,payer_name)]); return
 
     if msg.get('type') == 'image':
-        reply(event['replyToken'], [{'type':'text','text':'📸 รับรูปแล้วครับ (โหมดฟรี)\nตอนนี้ยังไม่ได้ใช้ AI อ่านสลิปอัตโนมัติ เพื่อไม่ให้มีค่า API\n\nพิมพ์ยอดตามหลังรูป เช่น “350 ร้าน ABC” แล้วผมจะบันทึกให้ครับ 💰'}]); return
-        split_mode='self'; participants=[user_id]; split_amounts=None
-        split=parse_split_instruction(parsed.get('note',''),h,user_id) if h else None
-        if split:
-            split_mode, participants, split_amounts, _ = split
-        tx=add_transaction(user_id=user_id, household_id=hid, source='slip', original_text='LINE image', payer_user_id=user_id,
-                           split_mode=split_mode, split_participants=participants, split_amounts=split_amounts, **parsed)
-        notify_transaction(tx, user_id)
-        payer_name=next((m.get('display_name') for m in (h or {}).get('members',[]) if m['user_id']==user_id), None)
-        reply(event['replyToken'], [transaction_flex(tx,h,payer_name)]); return
+        if not slip_enabled():
+            reply(event['replyToken'], [{'type':'text','text':'📸 รับรูปแล้วครับ (โหมดฟรี)\nตอนนี้ยังไม่ได้ใช้ AI อ่านสลิปอัตโนมัติ เพื่อไม่ให้มีค่า API\n\nพิมพ์ยอดตามหลังรูป เช่น “350 ร้าน ABC” แล้วผมจะบันทึกให้ครับ 💰'}]); return
+        await handle_slip(event, user_id, msg); return
 
     reply(event['replyToken'], [{'type':'text','text':'ตอนนี้รองรับข้อความและรูปสลิปครับ 💰'}])

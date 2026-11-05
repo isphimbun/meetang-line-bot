@@ -50,7 +50,89 @@ def parse_text(text, today=None):
     note=text.strip()
     return {'type':tx_type,'amount':amount,'category':category_for(text,tx_type),'merchant':merchant,'note':note,'occurred_at':occurred_at}
 
+# ---------- อ่านสลิปด้วย AI (เปิดใช้เมื่อตั้ง ANTHROPIC_API_KEY — ถ้าไม่ตั้ง ใช้โหมดฟรีเดิม: ให้พิมพ์ยอดเอง) ----------
+import os, json, base64
+from datetime import date, timedelta
+
+SLIP_PROMPT = """This is an image sent by a user in Thailand. Decide whether it is a bank transfer / payment slip
+(Thai mobile banking, PromptPay, QR payment, e-wallet receipt) and extract data.
+Reply with ONLY one JSON object, no markdown, with these keys:
+{"is_slip": true|false,
+ "amount": number or null,        // the transferred/paid amount only. NOT the fee, NOT the account balance, NOT account numbers. Plain number, no commas.
+ "date": "YYYY-MM-DD" or null,    // transaction date in the Christian era. Thai slips use Buddhist era (e.g. 2569 or short '69' = 2026): subtract 543.
+ "receiver": string,              // receiving person/shop name as printed, else ""
+ "bank": string,                  // bank or app name, else ""
+ "memo": string}                  // memo/note field if present, else ""
+If you are not sure about the amount, set amount to null. Never guess."""
+
+
+def slip_enabled():
+    return bool(os.getenv('ANTHROPIC_API_KEY', '').strip())
+
+
+def _media_type(b):
+    if b[:3] == b'\xff\xd8\xff': return 'image/jpeg'
+    if b[:8] == b'\x89PNG\r\n\x1a\n': return 'image/png'
+    if b[:4] == b'RIFF' and b[8:12] == b'WEBP': return 'image/webp'
+    if b[:3] == b'GIF': return 'image/gif'
+    return 'image/jpeg'
+
+
+def _extract_json(text):
+    m = re.search(r'\{.*\}', text or '', re.S)
+    if not m: return None
+    try: return json.loads(m.group(0))
+    except ValueError: return None
+
+
+def _empty_slip(today=None):
+    return {'type': 'expense', 'amount': None, 'category': 'อื่นๆ', 'merchant': '', 'note': '',
+            'occurred_at': today or datetime.now().date().isoformat()}
+
+
+def slip_from_json(data, today=None):
+    """แปลง JSON ที่ AI อ่านได้เป็นรายการ พร้อมตรวจความสมเหตุสมผล (ยอด/วันที่) — ไม่ผ่านจะได้ amount=None"""
+    today = today or datetime.now().date().isoformat()
+    out = _empty_slip(today)
+    if not isinstance(data, dict) or not data.get('is_slip'): return out
+    try: amount = float(str(data.get('amount')).replace(',', ''))
+    except (TypeError, ValueError): return out
+    if not (0 < amount < 10000000): return out
+    d = str(data.get('date') or '')[:10]
+    try:
+        y, mth, dd = (int(x) for x in d.split('-'))
+        if y > 2400: y -= 543                                   # พ.ศ. → ค.ศ.
+        slip_date = date(y, mth, dd)
+        t = date.fromisoformat(today)
+        if not (t - timedelta(days=730) <= slip_date <= t + timedelta(days=1)): slip_date = t
+        d = slip_date.isoformat()
+    except (ValueError, TypeError):
+        d = today
+    receiver = str(data.get('receiver') or '').strip()[:60]
+    bank = str(data.get('bank') or '').strip()[:30]
+    memo = str(data.get('memo') or '').strip()[:80]
+    note = ' · '.join(x for x in (f'สลิป {bank}'.strip(), receiver, memo) if x and x != 'สลิป')
+    out.update({'amount': round(amount, 2), 'merchant': receiver, 'note': note or 'สลิปโอนเงิน',
+                'category': category_for(memo, 'expense') if memo else 'อื่นๆ', 'occurred_at': d})   # ไม่เดาจากชื่อผู้รับ (เช่น สมชาย มีคำว่า "ชา")
+    return out
+
+
 def parse_slip(content: bytes):
-    # Free edition intentionally does not call a paid vision API.
-    # The bot asks the user to type the amount instead of pretending it read the image.
-    return {'type':'expense','amount':None,'category':'อื่นๆ','merchant':'','note':'','occurred_at':datetime.now().date().isoformat()}
+    today = datetime.now().date().isoformat()
+    key = os.getenv('ANTHROPIC_API_KEY', '').strip()
+    if not key or not content: return _empty_slip(today)
+    try:
+        import requests
+        r = requests.post('https://api.anthropic.com/v1/messages',
+            headers={'x-api-key': key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json'},
+            json={'model': os.getenv('SLIP_MODEL', 'claude-haiku-5-5'), 'max_tokens': 400,
+                  'messages': [{'role': 'user', 'content': [
+                      {'type': 'image', 'source': {'type': 'base64', 'media_type': _media_type(content), 'data': base64.b64encode(content).decode()}},
+                      {'type': 'text', 'text': SLIP_PROMPT}]}]},
+            timeout=45)
+        if r.status_code >= 300:
+            print('slip api error:', r.status_code, r.text[:200]); return _empty_slip(today)
+        text = ''.join(b.get('text', '') for b in r.json().get('content', []) if b.get('type') == 'text')
+        return slip_from_json(_extract_json(text), today)
+    except Exception as e:
+        print('slip error:', repr(e)); return _empty_slip(today)
