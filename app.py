@@ -11,10 +11,11 @@ from database import (init_db, upsert_user, create_household, join_household, ge
                       get_categories, delete_transaction, set_display_name, get_household, get_settlement,
                       rename_household, delete_household, leave_household, is_household_admin,
                       get_member_permissions, set_member_features, set_member_role, user_has_feature, get_all_user_ids, get_mortgage, is_super_admin, get_global_feature_permissions, set_global_feature, is_super_admin, get_global_feature_permissions, set_global_feature, global_user_has_feature, save_mortgage, add_mortgage_payment, mortgage_forecast, get_house_insurance,
-    insurance_forecast, add_house_insurance_payment, delete_house_insurance, add_house_insurance, get_house_expenses, add_house_expense, get_installments, add_installment, add_installment_payment, update_mortgage_payment, delete_mortgage_payment, ensure_schema, reminder_seen, reminder_mark, _mortgage_base, recalc_mortgage_payments, recalc_insurance_payments, update_house_insurance_payment, delete_house_insurance_payment)
+    insurance_forecast, add_house_insurance_payment, delete_house_insurance, add_house_insurance, get_house_expenses, add_house_expense, get_installments, add_installment, add_installment_payment, update_mortgage_payment, delete_mortgage_payment, ensure_schema, reminder_seen, reminder_mark, _mortgage_base, mortgage_interest_by_year, recalc_mortgage_payments, recalc_insurance_payments, update_house_insurance_payment, delete_house_insurance_payment)
 from ai import parse_text, parse_slip, slip_enabled
 from split_utils import parse_split_instruction
 from chat_actions import handle_house_chat
+from chat_query import classify as classify_query, run as run_chat_query
 from textutil import normalize_text, is_dashboard_request
 from auth import AuthMiddleware, make_token, verify_token, auth_enabled
 from reminders import start_reminders
@@ -325,7 +326,7 @@ def api_loan(user_id: str, household_id: int, extra_monthly: float | None = None
         simulation={'extra_monthly':extra_monthly,'base_months':len(fut),'sim_months':len(sfut),'months_saved':len(fut)-len(sfut),
                     'base_interest':round(bi,2),'sim_interest':round(si,2),'interest_saved':round(bi-si,2),
                     'base_end':fut[-1]['date'] if fut else None,'sim_end':sfut[-1]['date'] if sfut else None}
-    return {'mortgage':m,'forecast':forecast,'insurance':ins,'insurance_forecasts':insurance_forecasts,'expenses':exp,'paid_principal':round(paid_principal,2),'paid_interest':round(paid_interest,2),'actual_balance':round(actual_balance,2),'warnings':warnings,'simulation':simulation}
+    return {'mortgage':m,'forecast':forecast,'insurance':ins,'insurance_forecasts':insurance_forecasts,'expenses':exp,'paid_principal':round(paid_principal,2),'paid_interest':round(paid_interest,2),'actual_balance':round(actual_balance,2),'warnings':warnings,'simulation':simulation,'interest_by_year':mortgage_interest_by_year(m) if m else []}
 
 @app.get('/api/loan/export')
 def api_loan_export(user_id: str, household_id: int):
@@ -556,6 +557,12 @@ async def handle_event(event):
         house_reply = handle_house_chat(text, user_id)
         if house_reply is not None:
             reply(event['replyToken'], [{'type':'text','text':house_reply}]); return
+        q = classify_query(text)
+        if q:
+            h, hid = active_scope(user_id)
+            out = run_chat_query(q[0], q[1], user_id, h, hid)
+            if out is not None:
+                reply(event['replyToken'], [{'type':'text','text':out}]); return
         cmd, arg = find_command(text)
         if cmd and cmd['action'] == 'help':
             reply(event['replyToken'], [{'type':'text','text':help_message(user_id)}]); return

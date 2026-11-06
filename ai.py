@@ -30,9 +30,11 @@ def category_for(text, tx_type):
     if tx_type=='income':
         if any(k in low for k in ['เงินเดือน','salary','ค่าจ้าง','รายได้','โบนัส']): return 'เงินเดือน'
         return 'อื่นๆ'
+    best, best_len = 'อื่นๆ', 0     # เลือกหมวดที่ตรงกับคำ "ยาวที่สุด" เช่น ค่าน้ำ(บิล) ชนะ น้ำ(อาหาร), น้ำมัน(เดินทาง) ชนะ น้ำ
     for cat, kws in KEYWORDS.items():
-        if any(k.lower() in low for k in kws): return cat
-    return 'อื่นๆ'
+        for k in kws:
+            if k.lower() in low and len(k) > best_len: best, best_len = cat, len(k)
+    return best
 
 def parse_text(text, today=None):
     low=text.lower().strip()
@@ -66,8 +68,19 @@ Reply with ONLY one JSON object, no markdown, with these keys:
 If you are not sure about the amount, set amount to null. Never guess."""
 
 
+def _gemini_key(): return os.getenv('GEMINI_API_KEY', '').strip()
+def _anthropic_key(): return os.getenv('ANTHROPIC_API_KEY', '').strip()
+
+
+def slip_providers():
+    """ลำดับผู้ให้บริการที่จะลองอ่านสลิป — SLIP_PROVIDER=auto|gemini|anthropic (auto = Gemini ก่อน ถ้าล้มเหลวค่อย Anthropic)"""
+    pref = os.getenv('SLIP_PROVIDER', 'auto').strip().lower()
+    avail = [n for n, k in (('gemini', _gemini_key()), ('anthropic', _anthropic_key())) if k]
+    return [pref] if pref in avail else avail if pref == 'auto' else []
+
+
 def slip_enabled():
-    return bool(os.getenv('ANTHROPIC_API_KEY', '').strip())
+    return bool(slip_providers())
 
 
 def _media_type(b):
@@ -117,22 +130,51 @@ def slip_from_json(data, today=None):
     return out
 
 
+def _call_gemini(content):
+    """คืน dict ที่ AI อ่านได้ (อาจเป็น {} ถ้าไม่ใช่สลิป) หรือ None ถ้าเรียก API ไม่สำเร็จ"""
+    import requests
+    model = os.getenv('GEMINI_MODEL', 'gemini-3.8-flash').strip()
+    r = requests.post(f'https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent',
+        headers={'x-goog-api-key': _gemini_key(), 'Content-Type': 'application/json'},
+        json={'contents': [{'parts': [
+                  {'inline_data': {'mime_type': _media_type(content), 'data': base64.b64encode(content).decode()}},
+                  {'text': SLIP_PROMPT}]}],
+              'generationConfig': {'temperature': 0, 'responseMimeType': 'application/json'}},
+        timeout=45)
+    if r.status_code >= 300:
+        print('slip gemini error:', r.status_code, r.text[:200]); return None
+    cands = r.json().get('candidates') or []
+    if not cands:
+        print('slip gemini: no candidates (blocked?)'); return None
+    text = ''.join(p.get('text', '') for p in (cands[0].get('content') or {}).get('parts', []))
+    return _extract_json(text) or {}
+
+
+def _call_anthropic(content):
+    import requests
+    r = requests.post('https://api.anthropic.com/v1/messages',
+        headers={'x-api-key': _anthropic_key(), 'anthropic-version': '2023-06-01', 'content-type': 'application/json'},
+        json={'model': os.getenv('SLIP_MODEL', 'claude-haiku-5-5'), 'max_tokens': 400,
+              'messages': [{'role': 'user', 'content': [
+                  {'type': 'image', 'source': {'type': 'base64', 'media_type': _media_type(content), 'data': base64.b64encode(content).decode()}},
+                  {'type': 'text', 'text': SLIP_PROMPT}]}]},
+        timeout=45)
+    if r.status_code >= 300:
+        print('slip anthropic error:', r.status_code, r.text[:200]); return None
+    text = ''.join(b.get('text', '') for b in r.json().get('content', []) if b.get('type') == 'text')
+    return _extract_json(text) or {}
+
+
 def parse_slip(content: bytes):
+    """อ่านสลิป: ลองผู้ให้บริการตามลำดับ — ถ้าเรียก API ล้มเหลว (โควตาหมด/เน็ต/ถูกบล็อก) ค่อยลองเจ้าถัดไป
+    ถ้าเรียกสำเร็จแต่ไม่ใช่สลิป/อ่านไม่ออก จะหยุดเลย (ไม่เสียเงินเจ้าที่สองซ้ำ)"""
     today = datetime.now().date().isoformat()
-    key = os.getenv('ANTHROPIC_API_KEY', '').strip()
-    if not key or not content: return _empty_slip(today)
-    try:
-        import requests
-        r = requests.post('https://api.anthropic.com/v1/messages',
-            headers={'x-api-key': key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json'},
-            json={'model': os.getenv('SLIP_MODEL', 'claude-haiku-5-5'), 'max_tokens': 400,
-                  'messages': [{'role': 'user', 'content': [
-                      {'type': 'image', 'source': {'type': 'base64', 'media_type': _media_type(content), 'data': base64.b64encode(content).decode()}},
-                      {'type': 'text', 'text': SLIP_PROMPT}]}]},
-            timeout=45)
-        if r.status_code >= 300:
-            print('slip api error:', r.status_code, r.text[:200]); return _empty_slip(today)
-        text = ''.join(b.get('text', '') for b in r.json().get('content', []) if b.get('type') == 'text')
-        return slip_from_json(_extract_json(text), today)
-    except Exception as e:
-        print('slip error:', repr(e)); return _empty_slip(today)
+    if not content: return _empty_slip(today)
+    for name in slip_providers():
+        try:
+            data = {'gemini': _call_gemini, 'anthropic': _call_anthropic}[name](content)
+        except Exception as e:
+            print('slip error:', name, repr(e)); data = None
+        if data is not None:
+            return slip_from_json(data, today)
+    return _empty_slip(today)

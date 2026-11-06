@@ -335,6 +335,50 @@ def get_summary(month=None, user_id=None, household_id=None):
     return {'month':month,'income':income,'expense':expense,'balance':income-expense,'count':count,'categories':[dict(r) for r in cats]}
 
 
+def sum_transactions(start, end, user_id=None, household_id=None, tx_type='expense', category=None):
+    """รวมยอดช่วงวันที่ start..end (YYYY-MM-DD รวมทั้งสองวัน) → {'total','count','categories':[{category,total,count}]}"""
+    scope, params = _scope(user_id, household_id)
+    where = f"{scope} AND type=? AND substr(CAST(occurred_at AS TEXT),1,10)>=? AND substr(CAST(occurred_at AS TEXT),1,10)<=?"
+    qp = params + [tx_type, str(start)[:10], str(end)[:10]]
+    if category: where += ' AND category=?'; qp = qp + [category]
+    with conn() as c:
+        t = c.execute(f'SELECT COALESCE(SUM(amount),0), COUNT(*) FROM transactions WHERE {where}', qp).fetchone()
+        cats = c.execute(f'SELECT category, COALESCE(SUM(amount),0) total, COUNT(*) cnt FROM transactions WHERE {where} GROUP BY category ORDER BY total DESC', qp).fetchall()
+    return {'total': round(float(t[0] or 0), 2), 'count': int(t[1] or 0),
+            'categories': [{'category': r[0], 'total': round(float(r[1] or 0), 2), 'count': int(r[2])} for r in cats]}
+
+
+def update_transaction(tx_id, user_id, household_id=None, amount=None, category=None):
+    """แก้ยอด/หมวดของรายการ → (row, None) หรือ (None, เหตุผล) — แก้ได้เฉพาะเจ้าของรายการ ผู้จ่าย หรือแอดมินบ้าน"""
+    scope, params = _scope(user_id, household_id)
+    with conn() as c:
+        row = c.execute(f'SELECT * FROM transactions WHERE id=? AND {scope}', [tx_id] + params).fetchone()
+    if not row: return None, 'ไม่พบรายการนี้'
+    row = dict(row)
+    if household_id and user_id not in (row.get('user_id'), row.get('payer_user_id')) and not is_household_admin(user_id, household_id):
+        return None, 'แก้ได้เฉพาะรายการของตัวเอง (หรือแอดมินบ้าน)'
+    new_amount = float(row['amount']); amounts_json = row.get('split_amounts'); parts_json = row.get('split_participants')
+    if amount is not None:
+        if amount <= 0 or amount >= 10000000: return None, 'ยอดไม่ถูกต้อง'
+        new_amount = round(float(amount), 2)
+        payer = row.get('payer_user_id') or row.get('user_id')
+        try: old = json.loads(row.get('split_amounts') or '{}')
+        except Exception: old = {}
+        if row.get('split_mode') in (None, '', 'self') or not old:
+            amounts = {payer: new_amount}; parts = [payer]
+        else:                                     # หารกับคนอื่น: คงสัดส่วนเดิม ปรับเศษสตางค์ที่คนสุดท้าย
+            ratio = new_amount / float(row['amount']) if float(row['amount']) else 1
+            amounts = {u: round(float(v) * ratio, 2) for u, v in old.items()}
+            last = list(amounts)[-1]; amounts[last] = round(amounts[last] + (new_amount - sum(amounts.values())), 2)
+            parts = list(amounts)
+        amounts_json = json.dumps(amounts, ensure_ascii=False); parts_json = json.dumps(parts, ensure_ascii=False)
+    with conn() as c:
+        c.execute('UPDATE transactions SET amount=?, category=?, split_amounts=?, split_participants=? WHERE id=?',
+                  (new_amount, category or row['category'], amounts_json, parts_json, tx_id)); c.commit()
+        out = dict(c.execute('SELECT * FROM transactions WHERE id=?', (tx_id,)).fetchone())
+    return out, None
+
+
 def get_recent(limit=20, user_id=None, household_id=None):
     scope, params = _scope(user_id, household_id)
     with conn() as c:
@@ -629,6 +673,41 @@ def calc_monthly_payment(principal, annual_rate, months):
     r=annual_rate/100/12
     if r==0: return round(principal/months,2)
     return round(principal*r/(1-(1+r)**(-months)),2)
+
+
+TAX_INTEREST_LIMIT = 100000.0   # ดอกเบี้ยเงินกู้ที่อยู่อาศัย หักลดหย่อนได้ตามจริงไม่เกิน 100,000 บาท/ปี (รวมทุกหลัง กู้ร่วมแบ่งเท่าๆ กัน) — ตรวจกับกรมสรรพากร/ธนาคารก่อนใช้จริง
+
+
+def mortgage_interest_by_year(m, today=None):
+    """สรุปดอกเบี้ยบ้านรายปี (ปีปฏิทิน) จากงวดที่บันทึกไว้จริง + ประมาณการส่วนที่เหลือของปีปัจจุบัน"""
+    if not m: return []
+    today = _to_date(today) if today else datetime.now(TZ).date()
+    _, bdate, has_open = _mortgage_base(m)
+    by = {}
+    for p in m.get('payments') or []:
+        d = str(p['payment_date'])[:10]
+        if has_open and d <= bdate: continue          # งวดก่อนวันยอดยกมา ไม่ได้อยู่ในระบบ
+        y = int(d[:4]); r = by.setdefault(y, {'year': y, 'count': 0, 'interest': 0.0, 'principal': 0.0, 'extra': 0.0, 'paid': 0.0, 'first': d, 'last': d})
+        r['count'] += 1; r['interest'] += float(p.get('interest') or 0); r['principal'] += float(p.get('principal') or 0)
+        r['extra'] += float(p.get('extra_principal') or 0); r['paid'] += float(p.get('amount') or 0)
+        r['first'] = min(r['first'], d); r['last'] = max(r['last'], d)
+    proj = 0.0
+    if m.get('payments') is not None:
+        fc = mortgage_forecast(m, int(m.get('term_years') or 30) * 12 + len(m.get('payments') or []))
+        proj = sum(float(r['interest']) for r in fc if not r.get('actual') and str(r['date'])[:4] == str(today.year))
+    start = str(bdate or m.get('start_date') or '')[:10]
+    out = []
+    for y in sorted(by, reverse=True):
+        r = by[y]
+        for k in ('interest', 'principal', 'extra', 'paid'): r[k] = round(r[k], 2)
+        r['deductible'] = round(min(r['interest'], TAX_INTEREST_LIMIT), 2); r['over_limit'] = r['interest'] > TAX_INTEREST_LIMIT
+        if y == today.year: r['projected_interest'] = round(r['interest'] + proj, 2)
+        expected = 12
+        if start[:4] == str(y): expected = 13 - int(start[5:7] or 1) if len(start) >= 7 else 12
+        r['partial_start'] = bool(has_open and start[:4] == str(y))
+        r['maybe_incomplete'] = bool(y < today.year and r['count'] < expected)
+        out.append(r)
+    return out
 
 
 def _mortgage_base(m):

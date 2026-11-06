@@ -16,6 +16,7 @@ def load(path=None):
     CREATE TABLE house_insurance_payments(id INTEGER PRIMARY KEY AUTOINCREMENT,insurance_id,payment_date,amount,principal,interest,note);
     CREATE TABLE installment_plans(id INTEGER PRIMARY KEY AUTOINCREMENT,household_id,name,category,total_price,down_payment,financed_amount,total_installments,monthly_payment,start_date,interest_rate,provider,due_day,status,created_at);
     CREATE TABLE installment_payments(id INTEGER PRIMARY KEY AUTOINCREMENT,plan_id,payment_date,amount,principal,interest,note);
+    CREATE TABLE transactions(id INTEGER PRIMARY KEY AUTOINCREMENT,user_id,household_id,type,amount,category,merchant,note,occurred_at,source,original_text,created_at,payer_user_id,split_mode,split_participants,split_amounts);
     CREATE TABLE house_expenses(id INTEGER PRIMARY KEY AUTOINCREMENT,household_id,expense_date,expense_type,description,amount,note);
     ''')
     class C:

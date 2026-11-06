@@ -21,26 +21,67 @@ def test_extract_json_from_fenced_text():
     assert ai._extract_json('```json\n{"is_slip": true, "amount": 5}\n```')=={'is_slip':True,'amount':5}
     assert ai._extract_json('no json') is None and ai._extract_json('{bad') is None
 
-def test_parse_slip_request_shape_and_free_mode():
-    os.environ.pop('ANTHROPIC_API_KEY',None)
-    assert not ai.slip_enabled() and ai.parse_slip(b'\xff\xd8\xff123')['amount'] is None   # ไม่มี key = โหมดฟรี ไม่เรียก API
-    os.environ['ANTHROPIC_API_KEY']='k'; seen={}
+def _env(**kw):
+    for k in ('ANTHROPIC_API_KEY','GEMINI_API_KEY','SLIP_PROVIDER','GEMINI_MODEL'): os.environ.pop(k,None)
+    os.environ.update(kw)
+
+class _R:
+    def __init__(s,status=200,body=None,text=''): s.status_code=status; s._b=body; s.text=text
+    def json(s): return s._b
+
+GOOD='{"is_slip":true,"amount":350,"date":"2026-11-04","receiver":"ร้าน ABC","bank":"SCB","memo":""}'
+def gem(text=GOOD): return {'candidates':[{'content':{'parts':[{'text':text}]}}]}
+def ant(text=GOOD): return {'content':[{'type':'text','text':text}]}
+
+def test_free_mode_without_keys():
+    _env(); assert not ai.slip_enabled() and ai.slip_providers()==[] and ai.parse_slip(b'\xff\xd8\xff1')['amount'] is None
+
+def test_gemini_request_shape_and_result():
+    _env(GEMINI_API_KEY='gk'); seen={}
     import requests
-    class R:
-        status_code=200
-        def json(s): return {'content':[{'type':'text','text':'{"is_slip":true,"amount":350,"date":"2026-11-04","receiver":"ร้าน ABC","bank":"SCB","memo":""}'}]}
-    def post(url,headers,json,timeout): seen.update(url=url,headers=headers,body=json,timeout=timeout); return R()
+    def post(url,headers,json,timeout): seen.update(url=url,h=headers,b=json); return _R(200,gem())
     requests.post=post
     t=ai.parse_slip(b'\xff\xd8\xff\x00data')
-    assert t['amount']==350 and t['merchant']=='ร้าน ABC'
-    assert seen['url']=='https://api.anthropic.com/v1/messages' and seen['headers']['x-api-key']=='k' and 'anthropic-version' in seen['headers']
-    blk=seen['body']['messages'][0]['content']; assert blk[0]['type']=='image' and blk[0]['source']['media_type']=='image/jpeg' and blk[1]['type']=='text'
-    class E(R):
-        status_code=500; text='boom'
-    requests.post=lambda *a,**k:E(); assert ai.parse_slip(b'\xff\xd8\xff')['amount'] is None
+    assert t['amount']==350 and t['merchant']=='ร้าน ABC' and ai.slip_providers()==['gemini']
+    assert seen['url']=='https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent'
+    assert seen['h']['x-goog-api-key']=='gk'
+    parts=seen['b']['contents'][0]['parts']; assert parts[0]['inline_data']['mime_type']=='image/jpeg' and 'text' in parts[1]
+    assert seen['b']['generationConfig']['responseMimeType']=='application/json'
+    _env(GEMINI_API_KEY='gk',GEMINI_MODEL='gemini-3.5-flash-lite'); ai.parse_slip(b'\xff\xd8\xff')
+    assert seen['url'].endswith('/models/gemini-3.5-flash-lite:generateContent')
+
+def test_anthropic_only_still_works():
+    _env(ANTHROPIC_API_KEY='ak'); seen={}
+    import requests
+    def post(url,headers,json,timeout): seen.update(url=url,h=headers,b=json); return _R(200,ant())
+    requests.post=post
+    assert ai.parse_slip(b'\xff\xd8\xff')['amount']==350 and seen['url']=='https://api.anthropic.com/v1/messages'
+    assert seen['h']['x-api-key']=='ak' and seen['b']['messages'][0]['content'][0]['source']['media_type']=='image/jpeg'
+
+def test_fallback_when_gemini_fails_but_not_when_unreadable():
+    _env(GEMINI_API_KEY='gk',ANTHROPIC_API_KEY='ak'); calls=[]
+    import requests
+    def post(url,headers,json,timeout):
+        calls.append('gemini' if 'googleapis' in url else 'anthropic')
+        if 'googleapis' in url: return _R(429,text='quota')
+        return _R(200,ant())
+    requests.post=post
+    assert ai.parse_slip(b'\xff\xd8\xff')['amount']==350 and calls==['gemini','anthropic']      # โควตา Gemini หมด → สลับ
+    calls.clear()
+    def post2(url,headers,json,timeout):
+        calls.append('gemini' if 'googleapis' in url else 'anthropic'); return _R(200,gem('{"is_slip":false}'))
+    requests.post=post2
+    assert ai.parse_slip(b'\xff\xd8\xff')['amount'] is None and calls==['gemini']                 # ไม่ใช่สลิป → ไม่เรียกเจ้าสอง
     def boom(*a,**k): raise RuntimeError('net')
-    requests.post=boom; assert ai.parse_slip(b'\xff\xd8\xff')['amount'] is None
-    os.environ.pop('ANTHROPIC_API_KEY')
+    requests.post=boom; assert ai.parse_slip(b'\xff\xd8\xff')['amount'] is None                     # ล้มทั้งคู่ → โหมดให้พิมพ์ยอด
+    def blocked(*a,**k): return _R(200,{'candidates':[]})
+    requests.post=blocked; calls.clear(); assert ai.parse_slip(b'\xff\xd8\xff')['amount'] is None
+
+def test_provider_preference():
+    _env(GEMINI_API_KEY='gk',ANTHROPIC_API_KEY='ak'); assert ai.slip_providers()==['gemini','anthropic']
+    _env(GEMINI_API_KEY='gk',ANTHROPIC_API_KEY='ak',SLIP_PROVIDER='anthropic'); assert ai.slip_providers()==['anthropic']
+    _env(ANTHROPIC_API_KEY='ak',SLIP_PROVIDER='gemini'); assert ai.slip_providers()==[]            # ระบุเจ้าที่ไม่มี key
+    _env()
 
 def test_handle_slip_flow_dedupe_and_limit():
     # โหลด app.py แบบ stub (ไม่มี fastapi/ฐานข้อมูลในเครื่องทดสอบ)
