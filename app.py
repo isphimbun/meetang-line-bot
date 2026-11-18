@@ -6,7 +6,7 @@ from fastapi.responses import FileResponse, JSONResponse
 import requests
 
 from database import (init_db, upsert_user, create_household, join_household, get_active_household,
-                      get_user_households, set_active_household, add_transaction, get_summary, get_recent, create_wallet, list_wallets, transfer_wallet,
+                      get_user_households, set_active_household, add_transaction, get_summary, get_recent,
                       get_commands, add_command, update_command, delete_command, find_command,
                       get_categories, delete_transaction, set_display_name, get_household, get_settlement,
                       rename_household, delete_household, leave_household, is_household_admin,
@@ -17,7 +17,7 @@ from split_utils import parse_split_instruction
 from chat_actions import handle_house_chat
 from chat_query import classify as classify_query, run as run_chat_query
 from chat_trip import classify as classify_trip, run as run_trip, prepare_entry
-from textutil import normalize_text, is_dashboard_request
+from textutil import normalize_text, is_dashboard_request, extract_pay_method
 from auth import AuthMiddleware, make_token, verify_token, auth_enabled
 from reminders import start_reminders
 from notify import notify_transaction, notify_installment_payment, notify_loan_payment, notify_house_expense, notify_insurance_payment
@@ -249,54 +249,6 @@ def api_household(household_id: int, user_id: str):
     if not h or not any(m['user_id'] == user_id for m in h.get('members', [])):
         raise HTTPException(status_code=403, detail='not a household member')
     return h
-
-@app.get('/api/wallets')
-def api_wallets(user_id: str, household_id: int):
-    h=get_household(household_id)
-    if not h or not any(m['user_id']==user_id for m in h.get('members', [])):
-        raise HTTPException(status_code=403, detail='not a household member')
-    return {'wallets': list_wallets(user_id, household_id)}
-
-@app.post('/api/wallets')
-async def api_create_wallet(request: Request):
-    p=await request.json(); uid=str(p.get('user_id') or '').strip(); hid=int(p.get('household_id') or 0)
-    h=get_household(hid)
-    if not h or not any(m['user_id']==uid for m in h.get('members', [])): raise HTTPException(status_code=403, detail='not a household member')
-    try: return {'wallet':create_wallet(uid,hid,str(p.get('name') or ''),str(p.get('currency') or 'THB').upper(),float(p.get('opening_balance') or 0))}
-    except Exception as e: raise HTTPException(status_code=400,detail=str(e))
-
-@app.post('/api/wallets/transfer')
-async def api_wallet_transfer(request: Request):
-    p=await request.json(); uid=str(p.get('user_id') or '').strip(); hid=int(p.get('household_id') or 0)
-    h=get_household(hid)
-    if not h or not any(m['user_id']==uid for m in h.get('members', [])): raise HTTPException(status_code=403, detail='not a household member')
-    try: return {'transfer':transfer_wallet(uid,hid,int(p.get('from_wallet_id')),int(p.get('to_wallet_id')),float(p.get('amount') or 0),str(p.get('note') or ''))}
-    except Exception as e: raise HTTPException(status_code=400,detail=str(e))
-
-@app.post('/api/transactions')
-async def api_create_transaction(request: Request):
-    p=await request.json(); uid=str(p.get('user_id') or '').strip(); hid=int(p.get('household_id') or 0)
-    h=get_household(hid)
-    if not h or not any(m['user_id']==uid for m in h.get('members', [])): raise HTTPException(status_code=403, detail='not a household member')
-    try:
-        wallet_id=int(p.get('wallet_id')); wallet=next((w for w in list_wallets(uid,hid) if w['id']==wallet_id),None)
-        if not wallet: raise ValueError('ไม่พบกระเป๋าเงินที่เลือก')
-        kind=str(p.get('type') or 'expense')
-        if kind not in ('expense','income'): raise ValueError('ประเภทรายการไม่ถูกต้อง')
-        original=float(p.get('original_amount') or p.get('amount') or 0)
-        if original<=0: raise ValueError('กรุณาระบุจำนวนเงิน')
-        currency=wallet['currency']; rate=1.0
-        if currency!='THB':
-            rate=float(p.get('fx_rate') or 0)
-            if rate<=0:
-                from fx import get_rate
-                info=get_rate(currency); rate=float(info.get('rate') or 0) if info else 0
-            if rate<=0: raise ValueError('ดึงอัตราแลกเปลี่ยนไม่ได้ กรุณาลองใหม่')
-        thb=round(original*rate,2)
-        if kind=='expense' and float(wallet['balance'])<original: raise ValueError('ยอดเงินในกระเป๋าไม่พอ')
-        tx=add_transaction(user_id=uid,household_id=hid,type=kind,amount=thb,category=str(p.get('category') or 'อื่นๆ'),merchant=str(p.get('merchant') or ''),note=str(p.get('note') or ''),source='dashboard',original_text='Dashboard',payer_user_id=uid,split_mode='self',split_participants=[uid],currency=currency,original_amount=original if currency!='THB' else None,fx_rate=rate if currency!='THB' else None,wallet_id=wallet_id,payment_method=wallet['name'])
-        return {'transaction':tx}
-    except Exception as e: raise HTTPException(status_code=400,detail=str(e))
 
 @app.delete('/api/transactions/{tx_id}')
 def api_delete(tx_id: int, user_id: str | None = None, household_id: int | None = None):
@@ -597,13 +549,14 @@ async def handle_slip(event, user_id, msg):
 async def handle_text_entry(event, user_id, text, h, hid):
     """บันทึกรายการจากข้อความอิสระ — รองรับเงินต่างประเทศ (ระบุหน่วย เช่น “ราเมง 1000 เยน” หรืออยู่ในโหมดทริป)"""
     today = datetime.now(TZ).date().isoformat()
-    fxp = await asyncio.to_thread(prepare_entry, text, user_id, today)
+    method, clean = extract_pay_method(text)          # “เงินสด” / “แตะบัตร” ต่อท้ายรายการ → เก็บเป็นวิธีจ่าย
+    fxp = await asyncio.to_thread(prepare_entry, clean, user_id, today, method)
     if fxp and fxp.get('error'):
         reply(event['replyToken'], [{'type':'text','text':fxp['error']}]); return
-    parsed = parse_text(fxp['text'] if fxp else text, today)
+    parsed = parse_text(fxp['text'] if fxp else clean, today)
     if not parsed.get('amount'):
         reply(event['replyToken'], [{'type':'text','text':'ยังอ่านจำนวนเงินไม่ได้ 😅\nลอง “กินข้าว 120” หรือส่งรูปสลิป\n\nจะเข้าเว็บ Dashboard พิมพ์ “เปิดแดชบอร์ด” ได้เลยครับ'}]); return
-    extra = {}
+    extra = {'pay_method': method} if method else {}
     if fxp: parsed['amount'] = fxp['thb']; extra = fxp['fields']
     split_mode = 'self'; participants = [user_id]; split_amounts = None
     split = parse_split_instruction(text, h, user_id) if h else None
@@ -657,8 +610,6 @@ async def handle_event(event):
             h,hid=active_scope(user_id); reply(event['replyToken'], [summary_flex(get_summary(user_id=user_id, household_id=hid), h)]); return
         if cmd and cmd['action'] == 'recent' and not arg:
             h,hid=active_scope(user_id); reply(event['replyToken'], [recent_flex(get_recent(10,user_id=user_id,household_id=hid), h)]); return
-        if cmd and cmd['action']=='expense' and cmd.get('name')=='ถอนเงิน' and arg:
-            reply(event['replyToken'], [{'type':'text','text':'💵 ถ้าถอนเงินจาก YouTrip ไปเป็นเงินสด ไม่ใช่รายจ่ายนะครับ\nเปิด Dashboard → รายการ → โอนเงิน แล้วเลือกจาก YouTrip ไป เงินสด ระบบจะไม่คิดเป็นรายจ่ายซ้ำครับ'}]); return
         if cmd and cmd['action'] in ('income','expense') and arg:
             h,hid=active_scope(user_id)
             parsed=parse_text(arg,datetime.now(TZ).date().isoformat())

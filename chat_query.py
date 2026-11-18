@@ -63,6 +63,8 @@ def classify(text):
         if rate_m: rate = float(rate_m.group(1)); rest = (rest[:rate_m.start()] + rest[rate_m.end():]).strip()
         orig_m = re.search(r'(?<![\d.])(\d[\d,]*(?:\.\d+)?)\s*(' + fx.unit_regex() + r')', rest, re.I)   # แก้ 123 1500 เยน
         if orig_m: original = float(orig_m.group(1).replace(',', '')); rest = (rest[:orig_m.start()] + rest[orig_m.end():]).strip()
+        pm = None; pm_m = re.search(r'เงินสด|แตะบัตร|รูดบัตร|บัตร|ไม่ระบุ', rest)            # แก้ล่าสุด เงินสด / แก้ 123 บัตร
+        if pm_m: pm = {'เงินสด': 'cash', 'ไม่ระบุ': ''}.get(pm_m.group(0), 'card'); rest = (rest[:pm_m.start()] + rest[pm_m.end():]).strip()
         cat_m = re.search(r'หมวด\s*(\S+)', rest)
         amt_m = re.search(r'(?<![\d.])(\d[\d,]*(?:\.\d+)?)', re.sub(r'หมวด\s*\S+', '', rest))
         category = None
@@ -70,8 +72,8 @@ def classify(text):
             w = cat_m.group(1); category = w if w in CATS else (category_for(w, 'expense') if category_for(w, 'expense') != 'อื่นๆ' else None)
             if category is None: return ('edit', {'error': f'ไม่รู้จักหมวด “{w}” ลองใช้: ' + ' · '.join(c for c in CATS)})
         amount = float(amt_m.group(1).replace(',', '')) if amt_m else None
-        if amount is None and category is None and rate is None and original is None: return None
-        return ('edit', {'id': int(m.group(1)) if m else None, 'amount': amount, 'category': category, 'fx_rate': rate, 'original_amount': original})
+        if amount is None and category is None and rate is None and original is None and pm is None: return None
+        return ('edit', {'id': int(m.group(1)) if m else None, 'amount': amount, 'category': category, 'fx_rate': rate, 'original_amount': original, 'pay_method': pm})
     # --- สรุปดอกเบี้ยบ้านรายปี ---
     tl = t.replace(' ', '')
     if (tl.startswith('สรุปดอกเบี้ย') or re.match(r'^ดอกเบี้ย(บ้าน|สินเชื่อ|ภาษี)?(ปี)?(25\d\d|20\d\d)?(หาร\d+|กู้ร่วม\d+)?$', tl)
@@ -130,13 +132,16 @@ def _run_edit(p, user_id, hid):
     rows = [r for r in db.get_recent(200, user_id=user_id, household_id=hid) if r['id'] == tx_id]
     if rows: before = rows[0]
     row, err = db.update_transaction(tx_id, user_id, hid, amount=p.get('amount'), category=p.get('category'),
-                                     fx_rate=p.get('fx_rate'), original_amount=p.get('original_amount'))
+                                     fx_rate=p.get('fx_rate'), original_amount=p.get('original_amount'), pay_method=p.get('pay_method'))
     if err: return f'⚠️ {err}'
     parts = []
     if before is None or float(row['amount']) != float(before['amount']):
         parts.append(f"ยอด {_money(before['amount']) if before else '?'} → {_money(row['amount'])} บาท")
     if p.get('fx_rate') is not None: parts.append(f"เรท {float(before['fx_rate']):.4f} → {float(row['fx_rate']):.4f}" if before and before.get('fx_rate') else f"เรท {float(row['fx_rate']):.4f}")
     if p.get('original_amount') is not None: parts.append(f"{fx.fmt(row['currency'], before['original_amount']) if before and before.get('original_amount') else '?'} → {fx.fmt(row['currency'], row['original_amount'])}")
+    if p.get('pay_method') is not None:
+        parts.append('วิธีจ่าย → ' + {'cash': '💵 เงินสด', 'card': '💳 บัตร'}.get(p['pay_method'], 'ไม่ระบุ')
+                     + (' (เรทเดิมไม่เปลี่ยน ใช้ “ปรับเรทเงินสด” ถ้าต้องการคิดใหม่)' if row.get('trip_id') and p['pay_method'] == 'cash' else ''))
     if p.get('category'): parts.append(f"หมวด {before['category'] if before else '?'} → {row['category']}")
     return f"✏️ แก้รายการ #{tx_id} แล้ว ({row.get('merchant') or row.get('note') or row['category']})\n" + '\n'.join(parts)
 

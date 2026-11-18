@@ -157,10 +157,10 @@ Render แผนฟรีจะ "หลับ" เมื่อไม่มีค
 - คอลัมน์/ตารางใหม่ (`transactions.currency/original_amount/fx_rate/trip_id`, `trips`, `fx_rates`) ถูกสร้างอัตโนมัติตอนเริ่มระบบ
 - ทดสอบ: `python tests/test_trip.py`
 
-## Wallets & payment methods (v43)
-
-- Dashboard supports household wallets in THB, JPY, USD and EUR (e.g. Cash JPY, YouTrip JPY, Cash THB).
-- Each dashboard income/expense transaction is assigned to a wallet. Foreign-currency entries retain the original amount and reference FX rate while the household summary remains in THB.
-- Transfers between wallets of the same currency are recorded separately and do not count as income or expense. Use this for ATM cash withdrawals (YouTrip JPY → Cash JPY).
-- Wallet balances are calculated from opening balance + wallet-linked income − wallet-linked expenses + incoming transfers − outgoing transfers.
-- Wallet tables and transaction columns are created automatically by `ensure_schema()` on startup; no manual SQL migration is needed for this release.
+## v43 — เงินสด / บัตร + เงินสดในกระเป๋าตอนไปต่างประเทศ
+- **ระบุวิธีจ่าย:** ต่อท้ายรายการด้วย `เงินสด` หรือ `แตะบัตร` (รับ รูดบัตร / บัตร / apple pay / card ด้วย) เช่น `ราเมง 1000 เงินสด` · `ของ 800 เยน แตะบัตร` — ใช้กับรายการบาทปกติได้เช่นกัน; ไม่ตีความคำว่า "บัตร"/"เครดิต" ทั่วไป (บัตรคอนเสิร์ต, ค่าบัตรเครดิต ไม่ถูกแตะ)
+- **ตั้งค่าเริ่มต้นของทริป:** `ตั้งจ่ายด้วย บัตร` (หรือ เงินสด / ไม่ระบุ) — ใช้กับรายการที่เป็นสกุลของทริปและไม่ได้ระบุเอง
+- **กดเงินสด:** `กดเงินสด 20000 เยน 4720 บาท` (บาทรวมค่าธรรมเนียมได้; ไม่ใส่บาท = ประมาณจากเรทตลาด) → ระบบเก็บเรทเฉลี่ยของเงินสดทั้งทริป; รายการ `เงินสด` ใช้เรทเฉลี่ยนี้เอง, รายการบัตรใช้เรทตลาด/เรททริป/เรทที่ใส่เอง
+- `เงินสดเหลือ` ดูเงินสดคงเหลือ · `ปรับเรทเงินสด` คิดรายการเงินสดเดิมใหม่ด้วยเรทเฉลี่ยล่าสุด · `ลบกดเงินล่าสุด` · แก้วิธีจ่าย: `แก้ล่าสุด เงินสด` / `แก้ 123 บัตร`
+- `ตั้งเรททริป` จะไม่แตะรายการเงินสดเมื่อทริปมีการกดเงินสดแล้ว; `สรุปทริป` แสดงยอดแยกเงินสด/บัตรและเงินสดคงเหลือ; หน้า Dashboard โชว์ 💵/💳 ที่รายการ
+- ตารางใหม่ `trip_cash` และคอลัมน์ `transactions.pay_method`, `trips.default_pay` ถูกสร้างอัตโนมัติ
