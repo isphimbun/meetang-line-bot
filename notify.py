@@ -40,6 +40,12 @@ def _thai_date(value=None):
     return f'{d.day} {_TH_MONTHS[d.month - 1]} {d.year}'
 
 
+def _foreign_suffix(tx):
+    if (tx.get('currency') or 'THB') == 'THB' or not tx.get('original_amount'): return ''
+    from fx import fmt
+    return f" ({fmt(tx['currency'], tx['original_amount'])})"
+
+
 def _member_name(h, user_id):
     for m in (h or {}).get('members', []):
         if m['user_id'] == user_id:
@@ -113,7 +119,7 @@ def notify_transaction(tx, actor_user_id):
             f"{h['name']} มีรายการใหม่ {_baht(tx.get('amount'))}",
             f"🏠 {h['name']} มีรายการใหม่",
             'มีการบันทึกรายรับใหม่' if is_income else 'มีการบันทึกค่าใช้จ่ายใหม่',
-            [('รายการ', what), ('จำนวน', _baht(tx.get('amount'))),
+            [('รายการ', what), ('จำนวน', _baht(tx.get('amount')) + _foreign_suffix(tx)),
              ('ผู้บันทึก', _member_name(h, actor_user_id)), ('วันที่', _thai_date(tx.get('occurred_at')))],
             'MeeTang – จัดการเงินบ้านให้ง่ายขึ้น ❤️')
     _dispatch(tx['household_id'], actor_user_id, build)

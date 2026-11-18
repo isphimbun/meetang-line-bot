@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 import database as db
 from ai import CATS, category_for
+import fx
 
 TZ = ZoneInfo('Asia/Bangkok')
 _MONTHS = ['ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.']
@@ -57,6 +58,11 @@ def classify(text):
     last = re.match(r'^แก้(?:ไข)?ล่าสุด\s+(.+)$', t)
     if m or last:
         rest = (m.group(2) if m else last.group(1)).strip()
+        rate = None; original = None
+        rate_m = re.search(r'เรท\s*(\d+(?:\.\d+)?)', rest)                       # แก้ล่าสุด เรท 0.23 (รายการเงินต่างประเทศ)
+        if rate_m: rate = float(rate_m.group(1)); rest = (rest[:rate_m.start()] + rest[rate_m.end():]).strip()
+        orig_m = re.search(r'(?<![\d.])(\d[\d,]*(?:\.\d+)?)\s*(' + fx.unit_regex() + r')', rest, re.I)   # แก้ 123 1500 เยน
+        if orig_m: original = float(orig_m.group(1).replace(',', '')); rest = (rest[:orig_m.start()] + rest[orig_m.end():]).strip()
         cat_m = re.search(r'หมวด\s*(\S+)', rest)
         amt_m = re.search(r'(?<![\d.])(\d[\d,]*(?:\.\d+)?)', re.sub(r'หมวด\s*\S+', '', rest))
         category = None
@@ -64,8 +70,8 @@ def classify(text):
             w = cat_m.group(1); category = w if w in CATS else (category_for(w, 'expense') if category_for(w, 'expense') != 'อื่นๆ' else None)
             if category is None: return ('edit', {'error': f'ไม่รู้จักหมวด “{w}” ลองใช้: ' + ' · '.join(c for c in CATS)})
         amount = float(amt_m.group(1).replace(',', '')) if amt_m else None
-        if amount is None and category is None: return None
-        return ('edit', {'id': int(m.group(1)) if m else None, 'amount': amount, 'category': category})
+        if amount is None and category is None and rate is None and original is None: return None
+        return ('edit', {'id': int(m.group(1)) if m else None, 'amount': amount, 'category': category, 'fx_rate': rate, 'original_amount': original})
     # --- สรุปดอกเบี้ยบ้านรายปี ---
     tl = t.replace(' ', '')
     if (tl.startswith('สรุปดอกเบี้ย') or re.match(r'^ดอกเบี้ย(บ้าน|สินเชื่อ|ภาษี)?(ปี)?(25\d\d|20\d\d)?(หาร\d+|กู้ร่วม\d+)?$', tl)
@@ -123,10 +129,14 @@ def _run_edit(p, user_id, hid):
     before = None
     rows = [r for r in db.get_recent(200, user_id=user_id, household_id=hid) if r['id'] == tx_id]
     if rows: before = rows[0]
-    row, err = db.update_transaction(tx_id, user_id, hid, amount=p.get('amount'), category=p.get('category'))
+    row, err = db.update_transaction(tx_id, user_id, hid, amount=p.get('amount'), category=p.get('category'),
+                                     fx_rate=p.get('fx_rate'), original_amount=p.get('original_amount'))
     if err: return f'⚠️ {err}'
     parts = []
-    if p.get('amount') is not None: parts.append(f"ยอด {_money(before['amount']) if before else '?'} → {_money(row['amount'])} บาท")
+    if before is None or float(row['amount']) != float(before['amount']):
+        parts.append(f"ยอด {_money(before['amount']) if before else '?'} → {_money(row['amount'])} บาท")
+    if p.get('fx_rate') is not None: parts.append(f"เรท {float(before['fx_rate']):.4f} → {float(row['fx_rate']):.4f}" if before and before.get('fx_rate') else f"เรท {float(row['fx_rate']):.4f}")
+    if p.get('original_amount') is not None: parts.append(f"{fx.fmt(row['currency'], before['original_amount']) if before and before.get('original_amount') else '?'} → {fx.fmt(row['currency'], row['original_amount'])}")
     if p.get('category'): parts.append(f"หมวด {before['category'] if before else '?'} → {row['category']}")
     return f"✏️ แก้รายการ #{tx_id} แล้ว ({row.get('merchant') or row.get('note') or row['category']})\n" + '\n'.join(parts)
 

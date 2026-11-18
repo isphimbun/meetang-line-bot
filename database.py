@@ -26,7 +26,7 @@ class PGCursor:
     ID_TABLES = {
         'households', 'transactions', 'bot_commands', 'mortgages', 'mortgage_rates',
         'mortgage_payments', 'house_insurance', 'house_insurance_payments',
-        'house_expenses', 'installment_plans', 'installment_payments'
+        'house_expenses', 'installment_plans', 'installment_payments', 'trips', 'wallet_accounts', 'wallet_transfers'
     }
 
     def __init__(self, cursor):
@@ -304,17 +304,21 @@ def _normalise_split(amount, payer_user_id, split_mode='self', participants=None
 
 
 def add_transaction(user_id, type, amount, category='อื่นๆ', merchant='', note='', occurred_at=None, source='text', original_text='', household_id=None,
-                    payer_user_id=None, split_mode='self', split_participants=None, split_amounts=None):
+                    payer_user_id=None, split_mode='self', split_participants=None, split_amounts=None,
+                    currency=None, original_amount=None, fx_rate=None, trip_id=None, wallet_id=None, payment_method=None):
+    """amount = ยอดเป็นบาทเสมอ; ถ้าจ่ายเป็นเงินต่างประเทศเก็บ currency/original_amount/fx_rate (บาทต่อ 1 หน่วย)/trip_id เพิ่ม"""
     occurred_at = occurred_at or datetime.now(TZ).isoformat(timespec='seconds')
     if household_id is None:
         h = get_active_household(user_id); household_id = h['id'] if h else None
     payer_user_id = payer_user_id or user_id
     participants, amounts = _normalise_split(amount, payer_user_id, split_mode, split_participants, split_amounts)
     with conn() as c:
-        cur = c.execute('''INSERT INTO transactions(user_id,household_id,type,amount,category,merchant,note,occurred_at,source,original_text,created_at,payer_user_id,split_mode,split_participants,split_amounts)
-                           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
-            (user_id, household_id, type, float(amount), category, merchant or '', note or '', occurred_at, source, original_text,
-             datetime.now(TZ).isoformat(timespec='seconds'), payer_user_id, split_mode, json.dumps(participants, ensure_ascii=False), json.dumps(amounts, ensure_ascii=False)))
+        cur = _insert(c, 'transactions', {'user_id': user_id, 'household_id': household_id, 'type': type, 'amount': float(amount), 'category': category,
+            'merchant': merchant or '', 'note': note or '', 'occurred_at': occurred_at, 'source': source, 'original_text': original_text,
+            'created_at': datetime.now(TZ).isoformat(timespec='seconds'), 'payer_user_id': payer_user_id, 'split_mode': split_mode,
+            'split_participants': json.dumps(participants, ensure_ascii=False), 'split_amounts': json.dumps(amounts, ensure_ascii=False),
+            'currency': currency or 'THB', 'original_amount': float(original_amount) if original_amount is not None else None,
+            'fx_rate': float(fx_rate) if fx_rate is not None else None, 'trip_id': trip_id, 'wallet_id': wallet_id, 'payment_method': payment_method or ''})
         row = c.execute('SELECT * FROM transactions WHERE id=?', (cur.lastrowid,)).fetchone(); c.commit(); return dict(row)
 
 
@@ -348,8 +352,23 @@ def sum_transactions(start, end, user_id=None, household_id=None, tx_type='expen
             'categories': [{'category': r[0], 'total': round(float(r[1] or 0), 2), 'count': int(r[2])} for r in cats]}
 
 
-def update_transaction(tx_id, user_id, household_id=None, amount=None, category=None):
-    """แก้ยอด/หมวดของรายการ → (row, None) หรือ (None, เหตุผล) — แก้ได้เฉพาะเจ้าของรายการ ผู้จ่าย หรือแอดมินบ้าน"""
+def _resplit(row, new_amount):
+    """คำนวณการหารใหม่เมื่อยอดเปลี่ยน → (split_amounts_json, split_participants_json)"""
+    payer = row.get('payer_user_id') or row.get('user_id')
+    try: old = json.loads(row.get('split_amounts') or '{}')
+    except Exception: old = {}
+    if row.get('split_mode') in (None, '', 'self') or not old:
+        amounts = {payer: new_amount}
+    else:                                     # หารกับคนอื่น: คงสัดส่วนเดิม ปรับเศษสตางค์ที่คนสุดท้าย
+        ratio = new_amount / float(row['amount']) if float(row['amount']) else 1
+        amounts = {u: round(float(v) * ratio, 2) for u, v in old.items()}
+        last = list(amounts)[-1]; amounts[last] = round(amounts[last] + (new_amount - sum(amounts.values())), 2)
+    return json.dumps(amounts, ensure_ascii=False), json.dumps(list(amounts), ensure_ascii=False)
+
+
+def update_transaction(tx_id, user_id, household_id=None, amount=None, category=None, fx_rate=None, original_amount=None):
+    """แก้ยอด/หมวด/เรท ของรายการ → (row, None) หรือ (None, เหตุผล) — แก้ได้เฉพาะเจ้าของรายการ ผู้จ่าย หรือแอดมินบ้าน
+    fx_rate / original_amount ใช้กับรายการที่บันทึกเป็นเงินต่างประเทศ: ยอดบาท = original_amount × fx_rate"""
     scope, params = _scope(user_id, household_id)
     with conn() as c:
         row = c.execute(f'SELECT * FROM transactions WHERE id=? AND {scope}', [tx_id] + params).fetchone()
@@ -357,26 +376,120 @@ def update_transaction(tx_id, user_id, household_id=None, amount=None, category=
     row = dict(row)
     if household_id and user_id not in (row.get('user_id'), row.get('payer_user_id')) and not is_household_admin(user_id, household_id):
         return None, 'แก้ได้เฉพาะรายการของตัวเอง (หรือแอดมินบ้าน)'
-    new_amount = float(row['amount']); amounts_json = row.get('split_amounts'); parts_json = row.get('split_participants')
+    fields = {}
+    if fx_rate is not None or original_amount is not None:
+        orig = float(original_amount) if original_amount is not None else row.get('original_amount')
+        rate = float(fx_rate) if fx_rate is not None else row.get('fx_rate')
+        if not orig or not rate or (original_amount is None and (row.get('currency') or 'THB') == 'THB'):
+            return None, 'รายการนี้ไม่ได้บันทึกเป็นเงินต่างประเทศ (แก้ยอดบาทด้วย “แก้ 123 150” แทน)'
+        if float(orig) <= 0 or float(rate) <= 0 or float(rate) > 100000: return None, 'ยอดหรือเรทไม่ถูกต้อง'
+        amount = round(float(orig) * float(rate), 2); fields.update({'original_amount': float(orig), 'fx_rate': float(rate)})
+    new_amount = float(row['amount'])
     if amount is not None:
         if amount <= 0 or amount >= 10000000: return None, 'ยอดไม่ถูกต้อง'
         new_amount = round(float(amount), 2)
-        payer = row.get('payer_user_id') or row.get('user_id')
-        try: old = json.loads(row.get('split_amounts') or '{}')
-        except Exception: old = {}
-        if row.get('split_mode') in (None, '', 'self') or not old:
-            amounts = {payer: new_amount}; parts = [payer]
-        else:                                     # หารกับคนอื่น: คงสัดส่วนเดิม ปรับเศษสตางค์ที่คนสุดท้าย
-            ratio = new_amount / float(row['amount']) if float(row['amount']) else 1
-            amounts = {u: round(float(v) * ratio, 2) for u, v in old.items()}
-            last = list(amounts)[-1]; amounts[last] = round(amounts[last] + (new_amount - sum(amounts.values())), 2)
-            parts = list(amounts)
-        amounts_json = json.dumps(amounts, ensure_ascii=False); parts_json = json.dumps(parts, ensure_ascii=False)
+        fields['split_amounts'], fields['split_participants'] = _resplit(row, new_amount)
+    fields.update({'amount': new_amount, 'category': category or row['category']})
     with conn() as c:
-        c.execute('UPDATE transactions SET amount=?, category=?, split_amounts=?, split_participants=? WHERE id=?',
-                  (new_amount, category or row['category'], amounts_json, parts_json, tx_id)); c.commit()
+        _update(c, 'transactions', fields, 'id=?', (tx_id,)); c.commit()
         out = dict(c.execute('SELECT * FROM transactions WHERE id=?', (tx_id,)).fetchone())
     return out, None
+
+
+# ===== อัตราแลกเปลี่ยน (แคชในฐานข้อมูล) + โหมดทริป =====
+def fx_cache_get(pair, rate_date):
+    with conn() as c:
+        r = c.execute('SELECT rate, source, fetched_at FROM fx_rates WHERE pair=? AND rate_date=?', (pair, rate_date)).fetchone()
+    return {'rate': float(r[0]), 'source': r[1], 'fetched_at': r[2], 'date': rate_date} if r else None
+
+
+def fx_cache_latest(pair):
+    with conn() as c:
+        r = c.execute('SELECT rate, source, fetched_at, rate_date FROM fx_rates WHERE pair=? ORDER BY rate_date DESC, fetched_at DESC LIMIT 1', (pair,)).fetchone()
+    return {'rate': float(r[0]), 'source': r[1], 'fetched_at': r[2], 'date': r[3]} if r else None
+
+
+def fx_cache_put(pair, rate_date, rate, source):
+    with conn() as c:
+        c.execute('INSERT INTO fx_rates(pair,rate_date,rate,source,fetched_at) VALUES(?,?,?,?,?) ON CONFLICT (pair,rate_date) DO UPDATE SET rate=EXCLUDED.rate, source=EXCLUDED.source, fetched_at=EXCLUDED.fetched_at',
+                  (pair, rate_date, float(rate), source, datetime.now(TZ).isoformat(timespec='seconds')))
+        c.commit()
+
+
+def _trip_row(r):
+    d = dict(r); d['active'] = bool(d.get('active')); d['fixed_rate'] = float(d['fixed_rate']) if d.get('fixed_rate') else None
+    return d
+
+
+def get_active_trip(user_id, today=None):
+    """ทริปที่เปิดอยู่ของผู้ใช้ — ถ้าเลยวันสิ้นสุดแล้วจะปิดให้เอง (กันลืมจบทริปแล้วบันทึกเป็นเงินต่างประเทศต่อ)"""
+    today = str(today or datetime.now(TZ).date().isoformat())[:10]
+    with conn() as c:
+        r = c.execute('SELECT * FROM trips WHERE user_id=? AND active=? ORDER BY id DESC LIMIT 1', (user_id, True)).fetchone()
+        if not r: return None
+        t = _trip_row(r)
+        if t.get('end_date') and str(t['end_date'])[:10] < today:
+            c.execute('UPDATE trips SET active=? WHERE id=?', (False, t['id'])); c.commit(); return None
+    return t
+
+
+def start_trip(user_id, household_id, name, currency, days=14, today=None):
+    """เริ่มทริป (ปิดทริปที่เปิดค้างอยู่ก่อน) → (trip, ทริปเดิมที่ถูกปิดหรือ None)"""
+    today = str(today or datetime.now(TZ).date().isoformat())[:10]
+    days = max(1, min(int(days or 14), 90))
+    prev = get_active_trip(user_id, today)
+    with conn() as c:
+        if prev: c.execute('UPDATE trips SET active=?, end_date=? WHERE id=?', (False, min(today, str(prev.get('end_date') or today)[:10]), prev['id']))
+        end = (_to_date(today) + _td(days=days - 1)).isoformat()
+        cur = c.execute('INSERT INTO trips(household_id,user_id,name,currency,start_date,end_date,active,fixed_rate,created_at) VALUES(?,?,?,?,?,?,?,?,?)',
+                        (household_id, user_id, name, currency, today, end, True, None, datetime.now(TZ).isoformat(timespec='seconds')))
+        t = _trip_row(c.execute('SELECT * FROM trips WHERE id=?', (cur.lastrowid,)).fetchone()); c.commit()
+    return t, prev
+
+
+def end_trip(user_id, today=None):
+    today = str(today or datetime.now(TZ).date().isoformat())[:10]
+    t = get_active_trip(user_id, today)
+    if not t: return None
+    with conn() as c:
+        c.execute('UPDATE trips SET active=?, end_date=? WHERE id=?', (False, min(today, str(t['end_date'])[:10]), t['id'])); c.commit()
+        return _trip_row(c.execute('SELECT * FROM trips WHERE id=?', (t['id'],)).fetchone())
+
+
+def set_trip_rate(user_id, rate, today=None):
+    """ตั้งเรทคงที่ของทริป (None = กลับไปใช้เรทตลาด) และคำนวณรายการเดิมในทริปใหม่ → (trip, จำนวนรายการที่ปรับ)"""
+    t = get_active_trip(user_id, today)
+    if not t: return None, 0
+    with conn() as c: c.execute('UPDATE trips SET fixed_rate=? WHERE id=?', (float(rate) if rate else None, t['id'])); c.commit()
+    n = 0
+    if rate:
+        with conn() as c:
+            rows = [dict(r) for r in c.execute('SELECT id,household_id FROM transactions WHERE trip_id=? AND original_amount IS NOT NULL', (t['id'],)).fetchall()]
+        for r in rows:
+            out, err = update_transaction(r['id'], user_id, r['household_id'], fx_rate=float(rate))
+            n += 1 if out else 0
+    t['fixed_rate'] = float(rate) if rate else None
+    return t, n
+
+
+def list_trips(user_id, limit=10):
+    with conn() as c:
+        return [_trip_row(r) for r in c.execute('SELECT * FROM trips WHERE user_id=? ORDER BY id DESC LIMIT ?', (user_id, limit)).fetchall()]
+
+
+def trip_summary(trip, today=None):
+    """รวมรายจ่ายของทริป: ยอดบาท + ยอดเงินต่างประเทศ แยกหมวด เฉลี่ยต่อวัน"""
+    today = _to_date(str(today or datetime.now(TZ).date().isoformat())[:10])
+    with conn() as c:
+        tot = c.execute('SELECT COALESCE(SUM(amount),0), COUNT(*), COALESCE(SUM(CASE WHEN currency=? THEN original_amount ELSE 0 END),0) FROM transactions WHERE trip_id=? AND type=?', (trip['currency'], trip['id'], 'expense')).fetchone()
+        cats = c.execute('SELECT category, COALESCE(SUM(amount),0) thb, COALESCE(SUM(CASE WHEN currency=? THEN original_amount ELSE 0 END),0) foreign_amt, COUNT(*) FROM transactions WHERE trip_id=? AND type=? GROUP BY category ORDER BY thb DESC', (trip['currency'], trip['id'], 'expense')).fetchall()
+    start = _to_date(str(trip['start_date'])[:10]); end = _to_date(str(trip['end_date'])[:10]) if trip.get('end_date') else today
+    last = min(today, end) if trip.get('active') else end
+    days = max(1, (last - start).days + 1)
+    thb = round(float(tot[0] or 0), 2); foreign = round(float(tot[2] or 0), 2)
+    return {'trip': trip, 'total_thb': thb, 'total_foreign': foreign, 'count': int(tot[1] or 0), 'days': days,
+            'per_day_thb': round(thb / days, 2), 'avg_rate': round(thb / foreign, 4) if foreign else None,
+            'categories': [{'category': r[0], 'thb': round(float(r[1]), 2), 'foreign': round(float(r[2]), 2), 'count': int(r[3])} for r in cats]}
 
 
 def get_recent(limit=20, user_id=None, household_id=None):
@@ -615,7 +728,10 @@ _OPTIONAL_COLS=[('mortgages','opening_balance','NUMERIC'),('mortgages','opening_
                 ('mortgage_payments','manual','BOOLEAN DEFAULT FALSE'),
                 ('house_insurance_payments','manual','BOOLEAN DEFAULT FALSE'),
                 ('installment_plans','interest_type',"TEXT DEFAULT 'reducing'"),
-                ('installment_payments','manual','BOOLEAN DEFAULT FALSE')]
+                ('installment_payments','manual','BOOLEAN DEFAULT FALSE'),
+                ('transactions','currency',"TEXT DEFAULT 'THB'"),('transactions','original_amount','NUMERIC'),
+                ('transactions','fx_rate','NUMERIC'),('transactions','trip_id','INTEGER'),
+                ('transactions','wallet_id','INTEGER'),('transactions','payment_method',"""TEXT DEFAULT 'cash'""")]
 _COLS=set()
 
 def ensure_schema():
@@ -635,9 +751,60 @@ def ensure_schema():
             with conn() as c: c.execute(f'SELECT {col} FROM {t} LIMIT 1').fetchall()
             _COLS.add((t,col))
         except Exception as e: print('schema missing',t,col,repr(e)[:120])
-    try:
-        with conn() as c: c.execute('CREATE TABLE IF NOT EXISTS reminder_log(key TEXT PRIMARY KEY, sent_at TEXT)')
-    except Exception as e: print('schema reminder_log',repr(e)[:120])
+    for name, ddl in (
+        ('reminder_log', 'CREATE TABLE IF NOT EXISTS reminder_log(key TEXT PRIMARY KEY, sent_at TEXT)'),
+        ('fx_rates', 'CREATE TABLE IF NOT EXISTS fx_rates(pair TEXT, rate_date TEXT, rate NUMERIC, source TEXT, fetched_at TEXT, PRIMARY KEY(pair, rate_date))'),
+        ('trips', 'CREATE TABLE IF NOT EXISTS trips(id SERIAL PRIMARY KEY, household_id INTEGER, user_id TEXT, name TEXT, currency TEXT, start_date TEXT, end_date TEXT, active BOOLEAN DEFAULT TRUE, fixed_rate NUMERIC, created_at TEXT)')):
+        try:
+            with conn() as c: c.execute(ddl)
+        except Exception as e: print('schema', name, repr(e)[:120])
+
+
+    for ddl in (
+        "CREATE TABLE IF NOT EXISTS wallet_accounts(id SERIAL PRIMARY KEY, household_id INTEGER NOT NULL, owner_user_id TEXT NOT NULL, name TEXT NOT NULL, currency TEXT NOT NULL DEFAULT 'THB', opening_balance NUMERIC NOT NULL DEFAULT 0, created_at TEXT)",
+        "CREATE TABLE IF NOT EXISTS wallet_transfers(id SERIAL PRIMARY KEY, household_id INTEGER NOT NULL, user_id TEXT NOT NULL, from_wallet_id INTEGER NOT NULL, to_wallet_id INTEGER NOT NULL, amount NUMERIC NOT NULL, currency TEXT NOT NULL, note TEXT DEFAULT '', occurred_at TEXT, created_at TEXT)"
+    ):
+        try:
+            with conn() as c: c.execute(ddl)
+        except Exception as e: print('wallet schema', repr(e)[:120])
+
+
+def create_wallet(user_id, household_id, name, currency='THB', opening_balance=0):
+    if currency not in ('THB','JPY','USD','EUR'): raise ValueError('สกุลเงินยังไม่รองรับ')
+    if not name.strip() or float(opening_balance)<0: raise ValueError('ชื่อหรือยอดตั้งต้นไม่ถูกต้อง')
+    with conn() as c:
+        cur=c.execute('INSERT INTO wallet_accounts(household_id,owner_user_id,name,currency,opening_balance,created_at) VALUES(?,?,?,?,?,?)',
+            (household_id,user_id,name.strip(),currency,float(opening_balance),datetime.now(TZ).isoformat(timespec='seconds')))
+        row=c.execute('SELECT * FROM wallet_accounts WHERE id=?',(cur.lastrowid,)).fetchone(); c.commit()
+    return dict(row)
+
+
+def list_wallets(user_id, household_id):
+    with conn() as c:
+        wallets=[dict(r) for r in c.execute('SELECT * FROM wallet_accounts WHERE household_id=? ORDER BY id',(household_id,)).fetchall()]
+        for w in wallets:
+            cur=w['currency']; wid=w['id']
+            tx=c.execute("SELECT COALESCE(SUM(CASE WHEN type='income' THEN COALESCE(original_amount,amount) ELSE -COALESCE(original_amount,amount) END),0) FROM transactions WHERE household_id=? AND wallet_id=?",(household_id,wid)).fetchone()[0] or 0
+            tr_in=c.execute('SELECT COALESCE(SUM(amount),0) FROM wallet_transfers WHERE household_id=? AND to_wallet_id=?',(household_id,wid)).fetchone()[0] or 0
+            tr_out=c.execute('SELECT COALESCE(SUM(amount),0) FROM wallet_transfers WHERE household_id=? AND from_wallet_id=?',(household_id,wid)).fetchone()[0] or 0
+            w['balance']=round(float(w['opening_balance'])+float(tx)+float(tr_in)-float(tr_out),2)
+    return wallets
+
+
+def transfer_wallet(user_id, household_id, from_wallet_id, to_wallet_id, amount, note=''):
+    amount=float(amount)
+    if amount<=0 or from_wallet_id==to_wallet_id: raise ValueError('ยอดหรือกระเป๋าปลายทางไม่ถูกต้อง')
+    wallets={w['id']:w for w in list_wallets(user_id,household_id)}
+    a=wallets.get(int(from_wallet_id)); b=wallets.get(int(to_wallet_id))
+    if not a or not b: raise ValueError('ไม่พบกระเป๋าเงิน')
+    if a['currency']!=b['currency']: raise ValueError('โอนข้ามสกุลเงินไม่ได้ กรุณาบันทึกยอดแลกเปลี่ยนแยกต่างหาก')
+    if float(a['balance'])<amount: raise ValueError('ยอดเงินในกระเป๋าต้นทางไม่เพียงพอ')
+    now=datetime.now(TZ).isoformat(timespec='seconds')
+    with conn() as c:
+        cur=c.execute('INSERT INTO wallet_transfers(household_id,user_id,from_wallet_id,to_wallet_id,amount,currency,note,occurred_at,created_at) VALUES(?,?,?,?,?,?,?,?,?)',
+            (household_id,user_id,int(from_wallet_id),int(to_wallet_id),amount,a['currency'],note,now,now))
+        row=dict(c.execute('SELECT * FROM wallet_transfers WHERE id=?',(cur.lastrowid,)).fetchone()); c.commit()
+    return row
 
 def _opt_ok(table,col): return (table,col) in _COLS
 

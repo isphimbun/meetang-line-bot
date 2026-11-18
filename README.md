@@ -146,3 +146,21 @@ Render แผนฟรีจะ "หลับ" เมื่อไม่มีค
 - **ดอกเบี้ยบ้านรายปี:** พิมพ์ `สรุปดอกเบี้ยบ้าน 2569 หาร 2` หรือดูในหน้าสินเชื่อ → ดอกเบี้ย/เงินต้นรายปี, ยอดลดหย่อน (ตามจริงไม่เกิน 100,000 บาท/ปี, กู้ร่วมแบ่งเท่าๆ กัน), ประมาณการทั้งปีสำหรับปีปัจจุบัน — ใช้หนังสือรับรองดอกเบี้ยจากธนาคารเป็นหลักฐานยื่นจริง
 - แก้การจัดหมวด: ใช้คำที่ "ยาวที่สุด" ที่ตรงกัน (ค่าน้ำ→บิล, น้ำมัน→เดินทาง แทนที่จะตกหมวดอาหารเพราะมีคำว่า "น้ำ")
 - ทดสอบ: `python tests/test_chat_query.py`
+
+
+## v42 — เงินต่างประเทศ (เยน ฯลฯ) + โหมดทริป
+- **แปลงเงินในแชท:** `1000 เยน กี่บาท` · `5000 บาท กี่เยน` · `เรทเยน` (รองรับ เยน ดอลลาร์ ยูโร วอน หยวน ปอนด์ สิงคโปร์ ฮ่องกง ไต้หวัน) และตัวแปลงในหน้า "รายการล่าสุด" ของ Dashboard
+- **บันทึกเป็นเงินต่างประเทศ:** `ราเมง 1000 เยน` · `ราเมง 1000 เยน เรท 0.23` (ใส่เรทที่ได้จริงเอง) — เก็บทั้งยอดเดิม เรท และยอดบาท; ยอดรวม/สรุปทั้งหมดยังเป็นบาท
+- **โหมดทริป (รายคน):** `เริ่มทริปญี่ปุ่น [ชื่อ] [7 วัน]` → พิมพ์ `ราเมง 1000` จะนับเป็นเยนอัตโนมัติ (พิมพ์ "บาท" ต่อท้ายถ้าจ่ายเป็นบาท) · `ตั้งเรททริป 0.23` (ปรับรายการเดิมให้ด้วย) · `สรุปทริป` · `จบทริป` · `ทริปทั้งหมด` — ปิดอัตโนมัติเมื่อครบวัน (ค่าเริ่มต้น 14 วัน สูงสุด 90) กันลืมจบทริป
+- **แก้รายการเงินต่างประเทศ:** `แก้ล่าสุด เรท 0.235` · `แก้ 123 1500 เยน`
+- **เรทอ้างอิง:** Frankfurter (ECB, ฟรี ไม่ต้องมีคีย์, อัปเดตรายวัน) → สำรอง open.er-api.com (ต้องให้เครดิตแหล่งที่มา) → ถ้าเรียกไม่ได้ใช้เรทที่แคชไว้ (ติดธงเตือน) — ไม่ใช่เรทบัตร/ร้านแลกเงิน จึงมีให้ใส่เรทเอง
+- คอลัมน์/ตารางใหม่ (`transactions.currency/original_amount/fx_rate/trip_id`, `trips`, `fx_rates`) ถูกสร้างอัตโนมัติตอนเริ่มระบบ
+- ทดสอบ: `python tests/test_trip.py`
+
+## Wallets & payment methods (v43)
+
+- Dashboard supports household wallets in THB, JPY, USD and EUR (e.g. Cash JPY, YouTrip JPY, Cash THB).
+- Each dashboard income/expense transaction is assigned to a wallet. Foreign-currency entries retain the original amount and reference FX rate while the household summary remains in THB.
+- Transfers between wallets of the same currency are recorded separately and do not count as income or expense. Use this for ATM cash withdrawals (YouTrip JPY → Cash JPY).
+- Wallet balances are calculated from opening balance + wallet-linked income − wallet-linked expenses + incoming transfers − outgoing transfers.
+- Wallet tables and transaction columns are created automatically by `ensure_schema()` on startup; no manual SQL migration is needed for this release.
